@@ -4,7 +4,11 @@ import $ from 'jquery';
 
 export default component(function spanNames() {
   this.updateSpanNames = function(ev, serviceName) {
-    $.ajax(`/api/v1/spans?serviceName=${serviceName}`, {
+    if (!serviceName) {
+      this.trigger('dataSpanNames', {spans: []});
+      return;
+    }
+    $.ajax(`api/v1/spans?serviceName=${serviceName}`, {
       type: 'GET',
       dataType: 'json'
     }).done(spans => {
@@ -16,5 +20,6 @@ export default component(function spanNames() {
 
   this.after('initialize', function() {
     this.on('uiChangeServiceName', this.updateSpanNames);
+    this.on('uiFirstLoadSpanNames', this.updateSpanNames);
   });
 });

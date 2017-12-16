@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -32,9 +32,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zipkin.Span;
 import zipkin.collector.CollectorSampler;
-import zipkin.internal.Util;
+import zipkin.internal.Nullable;
 
 import static com.google.common.base.Preconditions.checkState;
+import static zipkin.internal.Util.UTF_8;
 import static zipkin.internal.Util.checkArgument;
 import static zipkin.internal.Util.checkNotNull;
 
@@ -43,8 +44,9 @@ import static zipkin.internal.Util.checkNotNull;
  * zipkin storage layer. It works by coordinating a sample rate based on multiple instances vs a
  * target storage rate in spans/minute.
  *
- * <p>This assumes that each instance is storing every span it {@link #isSampled(Span) samples}, and
- * that the store rate is a useful metric (ex spans have relatively the same size and depth.
+ * <p>This assumes that each instance is storing every span it {@link #isSampled(long, Boolean)
+ * samples}, and that the store rate is a useful metric (ex spans have relatively the same size and
+ * depth.
  *
  * <p>If the storage layer is capable of 10k spans/minute, you'd set the target rate in ZooKeeper to
  * 10000. With this in mind, 10 balanced collectors writing 10k spans/minute would eventually see a
@@ -52,8 +54,8 @@ import static zipkin.internal.Util.checkNotNull;
  *
  * <h3>Implementation notes</h3>
  *
- * <p>This object spawns a single scheduling thread that reports its rate of {@link #isSampled(Span)
- * spans sampled}, per the {@link Builder#updateFrequency(int) update frequency}.
+ * <p>This object spawns a single scheduling thread that reports its rate of {@link #isSampled(long,
+ * Boolean) spans sampled}, per the {@link Builder#updateFrequency(int) update frequency}.
  *
  * <p>When a leader, this object summarizes recent sample rates and compares them against a target.
  *
@@ -186,7 +188,7 @@ public final class ZooKeeperCollectorSampler extends CollectorSampler implements
       log.debug("Store rates was: {} now {}", oldValue, newValue);
       if (oldValue != newValue) {
         storeRate.set(newValue);
-        storeRateGroup.setThisData(Integer.valueOf(newValue).toString().getBytes());
+        storeRateGroup.setThisData(Integer.valueOf(newValue).toString().getBytes(UTF_8));
       }
     }, 0, builder.updateFrequency, TimeUnit.SECONDS);
 
@@ -209,7 +211,7 @@ public final class ZooKeeperCollectorSampler extends CollectorSampler implements
       byte[] bytes = cache.getCurrentData().getData();
       if (bytes.length == 0) return;
       try {
-        targetStoreRate.set(Integer.valueOf(new String(bytes, Util.UTF_8)));
+        targetStoreRate.set(Integer.valueOf(new String(bytes, UTF_8)));
       } catch (NumberFormatException e) {
         log.warn("Error parsing target store rate {}", e.getMessage());
         return;
@@ -232,8 +234,12 @@ public final class ZooKeeperCollectorSampler extends CollectorSampler implements
     closer.close();
   }
 
-  @Override public boolean isSampled(Span span) {
-    boolean result = super.isSampled(span);
+  @Override @Deprecated public boolean isSampled(Span span) {
+    return isSampled(span.traceId, span.debug);
+  }
+
+  @Override public boolean isSampled(long traceId, @Nullable Boolean debug) {
+    boolean result = super.isSampled(traceId, debug);
     if (result) spanCount.incrementAndGet();
     return result;
   }

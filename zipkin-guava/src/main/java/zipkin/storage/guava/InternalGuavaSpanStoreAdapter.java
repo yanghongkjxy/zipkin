@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -42,15 +42,23 @@ final class InternalGuavaSpanStoreAdapter implements GuavaSpanStore {
     return result;
   }
 
-  @Override public ListenableFuture<List<Span>> getTrace(long id) {
+  @Override @Deprecated public ListenableFuture<List<Span>> getTrace(long id) {
+    return getTrace(0L, id);
+  }
+
+  @Override public ListenableFuture<List<Span>> getTrace(long traceIdHigh, long traceIdLow) {
     CallbackListenableFuture<List<Span>> result = new CallbackListenableFuture<>();
-    delegate.getTrace(id, result);
+    delegate.getTrace(traceIdHigh, traceIdLow, result);
     return result;
   }
 
-  @Override public ListenableFuture<List<Span>> getRawTrace(long traceId) {
+  @Override @Deprecated public ListenableFuture<List<Span>> getRawTrace(long traceId) {
+    return getRawTrace(0L, traceId);
+  }
+
+  @Override public ListenableFuture<List<Span>> getRawTrace(long traceIdHigh, long traceIdLow) {
     CallbackListenableFuture<List<Span>> result = new CallbackListenableFuture<>();
-    delegate.getRawTrace(traceId, result);
+    delegate.getRawTrace(traceIdHigh, traceIdLow, result);
     return result;
   }
 

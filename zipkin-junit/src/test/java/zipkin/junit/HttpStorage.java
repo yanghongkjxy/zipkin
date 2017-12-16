@@ -13,7 +13,6 @@
  */
 package zipkin.junit;
 
-import java.util.concurrent.Executor;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import zipkin.storage.AsyncSpanConsumer;
@@ -24,7 +23,10 @@ import zipkin.storage.StorageComponent;
 import static zipkin.storage.StorageAdapters.blockingToAsync;
 
 /**
- * Test storage component that keeps all spans in memory, accepting them on the calling thread.
+ * Test storage component that forwards requests to an HTTP endpoint.
+ *
+ * <p>Note: this inherits the {@link StorageComponent.Builder#strictTraceId(boolean)} from the
+ * backend.
  */
 final class HttpStorage implements StorageComponent {
   private final OkHttpClient client;
@@ -40,11 +42,8 @@ final class HttpStorage implements StorageComponent {
     this.client = new OkHttpClient();
     this.baseUrl = HttpUrl.parse(baseUrl);
     this.spanStore = new HttpSpanStore(this.client, this.baseUrl);
-    this.asyncSpanStore = blockingToAsync(spanStore, new Executor() {
-      @Override public void execute(Runnable command) {
-        command.run();
-      }
-    }); // TODO: rewrite http span store to default to async
+    // TODO: rewrite http span store to default to async
+    this.asyncSpanStore = blockingToAsync(spanStore, Runnable::run);
     this.consumer = new HttpSpanConsumer(this.client, this.baseUrl);
   }
 

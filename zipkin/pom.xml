@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright 2015-2016 The OpenZipkin Authors
+    Copyright 2015-2017 The OpenZipkin Authors
 
     Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
     in compliance with the License. You may obtain a copy of the License at
@@ -20,7 +20,7 @@
   <parent>
     <groupId>io.zipkin.java</groupId>
     <artifactId>parent</artifactId>
-    <version>1.5.2-SNAPSHOT</version>
+    <version>2.4.2-SNAPSHOT</version>
   </parent>
 
   <artifactId>zipkin</artifactId>
@@ -28,38 +28,81 @@
 
   <properties>
     <main.basedir>${project.basedir}/..</main.basedir>
+    <main.java.version>1.6</main.java.version>
+    <main.signature.artifact>java16</main.signature.artifact>
   </properties>
 
   <dependencies>
     <dependency>
+      <groupId>io.zipkin.zipkin2</groupId>
+      <artifactId>zipkin</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>com.google.auto.value</groupId>
+      <artifactId>auto-value</artifactId>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.jvnet</groupId>
+      <artifactId>animal-sniffer-annotation</artifactId>
+      <version>1.0</version>
+      <!-- annotations are not runtime retention, so don't need a runtime dep -->
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.8.2</version>
+    </dependency>
+
+    <dependency>
       <groupId>com.squareup.okio</groupId>
       <artifactId>okio</artifactId>
-    </dependency>
-
-    <dependency>
-      <groupId>com.squareup.moshi</groupId>
-      <artifactId>moshi</artifactId>
-    </dependency>
-
-    <dependency>
-      <groupId>org.mockito</groupId>
-      <artifactId>mockito-core</artifactId>
-      <version>${mockito.version}</version>
       <scope>test</scope>
     </dependency>
 
-    <!-- To avoid java.lang.NoClassDefFoundError: StacktracePrintingMatcher -->
+    <!-- to mock Platform calls -->
     <dependency>
-      <groupId>org.hamcrest</groupId>
-      <artifactId>hamcrest-core</artifactId>
-      <version>${hamcrest.version}</version>
+      <groupId>org.powermock</groupId>
+      <artifactId>powermock-module-junit4</artifactId>
+      <version>${powermock.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.powermock</groupId>
+      <artifactId>powermock-api-mockito2</artifactId>
+      <version>${powermock.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
 
   <build>
     <plugins>
-      <!-- Use of okio and moshi are internal only -->
+      <!-- Need to block import of shaded packages in bnd.bnd as maven bundle plugin analyzes the unshaded jar -->
+      <plugin>
+        <groupId>org.apache.felix</groupId>
+        <artifactId>maven-bundle-plugin</artifactId>
+        <!-- Travis cannot resolve 3.3.0-->
+        <version>3.2.0</version>
+        <configuration>
+          <obrRepository>NONE</obrRepository>
+          <instructions>
+            <_include>-bnd.bnd</_include>
+          </instructions>
+        </configuration>
+        <executions>
+          <execution>
+            <phase>process-classes</phase>
+            <goals>
+              <goal>manifest</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- Use of gson is internal only -->
       <plugin>
         <artifactId>maven-shade-plugin</artifactId>
         <executions>
@@ -71,14 +114,28 @@
             <configuration>
               <shadeTestJar>false</shadeTestJar>
               <minimizeJar>true</minimizeJar>
+              <filters>
+                <filter>
+                  <artifact>com.google.code.gson:gson</artifact>
+                  <includes>
+                    <include>com/google/gson/stream/JsonReader*.class</include>
+                    <include>com/google/gson/stream/JsonToken.class</include>
+                    <include>com/google/gson/stream/MalformedJsonException.class</include>
+                    <include>com/google/gson/internal/JsonReaderInternalAccess.class</include>
+                  </includes>
+                </filter>
+                <filter>
+                  <!-- don't include pom files, some are kilobytes -->
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/**</exclude>
+                  </excludes>
+                </filter>
+              </filters>
               <relocations>
                 <relocation>
-                  <pattern>okio</pattern>
-                  <shadedPattern>zipkin.internal.okio</shadedPattern>
-                </relocation>
-                <relocation>
-                  <pattern>com.squareup.moshi</pattern>
-                  <shadedPattern>zipkin.internal.moshi</shadedPattern>
+                  <pattern>com.google.gson</pattern>
+                  <shadedPattern>zipkin.internal.gson</shadedPattern>
                 </relocation>
               </relocations>
             </configuration>
@@ -86,10 +143,21 @@
         </executions>
       </plugin>
       <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
         <executions>
           <execution>
+            <id>default-jar</id>
+            <configuration>
+              <archive>
+                <manifestFile>${project.build.outputDirectory}/META-INF/MANIFEST.MF</manifestFile>
+              </archive>
+            </configuration>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>default-test-jar</id>
             <goals>
               <goal>test-jar</goal>
             </goals>

@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -36,11 +36,22 @@ final class InternalGuavaToAsyncSpanStoreAdapter implements AsyncSpanStore {
   }
 
   @Override public void getTrace(long id, Callback<List<Span>> callback) {
-    addCallback(delegate.getTrace(id), new InternalForwardingCallback<>(callback));
+    getTrace(0L, id, callback);
+  }
+
+  @Override public void getTrace(long traceIdHigh, long traceIdLow, Callback<List<Span>> callback) {
+    addCallback(delegate.getTrace(traceIdHigh, traceIdLow),
+        new InternalForwardingCallback<>(callback));
   }
 
   @Override public void getRawTrace(long traceId, Callback<List<Span>> callback) {
-    addCallback(delegate.getRawTrace(traceId), new InternalForwardingCallback<>(callback));
+    getRawTrace(0L, traceId, callback);
+  }
+
+  @Override
+  public void getRawTrace(long traceIdHigh, long traceIdLow, Callback<List<Span>> callback) {
+    addCallback(delegate.getRawTrace(traceIdHigh, traceIdLow),
+        new InternalForwardingCallback<>(callback));
   }
 
   @Override public void getServiceNames(Callback<List<String>> callback) {

@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -15,6 +15,7 @@ package zipkin.autoconfigure.ui;
 
 import java.util.concurrent.TimeUnit;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.util.StringUtils;
 
 @ConfigurationProperties("zipkin.ui")
 public class ZipkinUiProperties {
@@ -22,6 +23,8 @@ public class ZipkinUiProperties {
   private int queryLimit = 10;
   private int defaultLookback = (int) TimeUnit.DAYS.toMillis(7);
   private String instrumented = ".*";
+  private String logsUrl = null;
+  private Dependency dependency = new Dependency();
 
   public int getDefaultLookback() {
     return defaultLookback;
@@ -53,5 +56,44 @@ public class ZipkinUiProperties {
 
   public void setInstrumented(String instrumented) {
     this.instrumented = instrumented;
+  }
+
+  public String getLogsUrl() {
+    return logsUrl;
+  }
+
+  public void setLogsUrl(String logsUrl) {
+    if (!StringUtils.isEmpty(logsUrl)) {
+      this.logsUrl = logsUrl;
+    }
+  }
+
+  public Dependency getDependency() {
+    return dependency;
+  }
+
+  public void setDependency(Dependency dependency) {
+    this.dependency = dependency;
+  }
+
+  public static class Dependency {
+    private float lowErrorRate = 0.5f; // 50% of calls in error turns line yellow
+    private float highErrorRate = 0.75f; // 75% of calls in error turns line red
+
+    public float getLowErrorRate() {
+      return lowErrorRate;
+    }
+
+    public void setLowErrorRate(float lowErrorRate) {
+      this.lowErrorRate = lowErrorRate;
+    }
+
+    public float getHighErrorRate() {
+      return highErrorRate;
+    }
+
+    public void setHighErrorRate(float highErrorRate) {
+      this.highErrorRate = highErrorRate;
+    }
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -25,6 +25,7 @@ import zipkin.internal.Util;
 
 import static com.google.common.base.Preconditions.checkState;
 import static org.apache.curator.framework.CuratorFrameworkFactory.newClient;
+import static zipkin.internal.Util.propagateIfFatal;
 
 final class ZooKeeperRule implements TestRule {
   TestingCluster cluster;
@@ -44,25 +45,40 @@ final class ZooKeeperRule implements TestRule {
   @Override public Statement apply(Statement base, Description description) {
     return new Statement() {
       public void evaluate() throws Throwable {
-        try {
-          cluster = new TestingCluster(3);
-          cluster.start();
-
-          client = newClient(cluster.getConnectString(), new RetryOneTime(200 /* ms */));
-          client.start();
-
-          checkState(client.blockUntilConnected(5, TimeUnit.SECONDS),
-              "failed to connect to zookeeper in 5 seconds");
-
-          base.evaluate();
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          throw new IllegalStateException("Interrupted while connecting to ZooKeeper", e);
-        } finally {
-          client.close();
-          cluster.close();
+        for (int i = 1; i <= 3; i++) {
+          try {
+            doEvaluate(base);
+            break;
+          } catch (Throwable t) {
+            propagateIfFatal(t);
+            if (i == 3) {
+              throw t;
+            }
+            Thread.sleep(1000);
+          }
         }
       }
     };
+  }
+
+  void doEvaluate(Statement base) throws Throwable {
+    try {
+      cluster = new TestingCluster(3);
+      cluster.start();
+
+      client = newClient(cluster.getConnectString(), new RetryOneTime(200 /* ms */));
+      client.start();
+
+      checkState(client.blockUntilConnected(5, TimeUnit.SECONDS),
+          "failed to connect to zookeeper in 5 seconds");
+
+      base.evaluate();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Interrupted while connecting to ZooKeeper", e);
+    } finally {
+      client.close();
+      cluster.close();
+    }
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -20,16 +20,17 @@ import zipkin.Span;
 import zipkin.internal.Nullable;
 import zipkin.storage.QueryRequest;
 import zipkin.storage.SpanStore;
+import zipkin.storage.StorageComponent;
 
 final class TracedSpanStore implements SpanStore {
   private final LocalTracer tracer;
   private final SpanStore delegate;
   private final String component;
 
-  TracedSpanStore(LocalTracer tracer, SpanStore delegate) {
+  TracedSpanStore(LocalTracer tracer, StorageComponent component) {
     this.tracer = tracer;
-    this.delegate = delegate;
-    this.component = delegate.getClass().getSimpleName();
+    this.delegate = component.spanStore();
+    this.component = component.getClass().getSimpleName();
   }
 
   @Override
@@ -46,9 +47,13 @@ final class TracedSpanStore implements SpanStore {
 
   @Override
   public List<Span> getTrace(long traceId) {
+    return getTrace(0L, traceId);
+  }
+
+  @Override public List<Span> getTrace(long traceIdHigh, long traceIdLow) {
     tracer.startNewSpan(component, "get-trace");
     try {
-      return delegate.getTrace(traceId);
+      return delegate.getTrace(traceIdHigh, traceIdLow);
     } finally {
       tracer.finishSpan();
     }
@@ -56,9 +61,13 @@ final class TracedSpanStore implements SpanStore {
 
   @Override
   public List<Span> getRawTrace(long traceId) {
-    tracer.startNewSpan(component, "get-spans-by-trace-id");
+    return getRawTrace(0L, traceId);
+  }
+
+  @Override public List<Span> getRawTrace(long traceIdHigh, long traceIdLow) {
+    tracer.startNewSpan(component, "get-raw-trace");
     try {
-      return delegate.getRawTrace(traceId);
+      return delegate.getRawTrace(traceIdHigh, traceIdLow);
     } finally {
       tracer.finishSpan();
     }

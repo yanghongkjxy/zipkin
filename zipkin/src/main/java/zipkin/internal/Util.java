@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -84,7 +84,8 @@ public final class Util {
 
   public static List<Date> getDays(long endTs, @Nullable Long lookback) {
     long to = midnightUTC(endTs);
-    long from = midnightUTC(endTs - (lookback != null ? lookback : endTs));
+    long startMillis = endTs - (lookback != null ? lookback : endTs);
+    long from = startMillis <= 0 ? 0 : midnightUTC(startMillis); // >= 1970
 
     List<Date> days = new ArrayList<>();
     for (long time = from; time <= to; time += TimeUnit.DAYS.toMillis(1)) {
@@ -93,14 +94,28 @@ public final class Util {
     return days;
   }
 
-  /** Parses a 1 to 16 character lower-hex string with no prefix int an unsigned long. */
+  /**
+   * Parses a 1 to 32 character lower-hex string with no prefix into an unsigned long, tossing any
+   * bits higher than 64.
+   */
   public static long lowerHexToUnsignedLong(String lowerHex) {
-    char[] array = lowerHex.toCharArray();
-    if (array.length < 1 || array.length > 16) {
-      throw isntLowerHexLong(lowerHex);
-    }
+    int length = lowerHex.length();
+    if (length < 1 || length > 32) throw isntLowerHexLong(lowerHex);
+
+    // trim off any high bits
+    int beginIndex = length > 16 ? length - 16 : 0;
+
+    return lowerHexToUnsignedLong(lowerHex, beginIndex);
+  }
+
+  /**
+   * Parses a 16 character lower-hex string with no prefix into an unsigned long, starting at the
+   * spe index.
+   */
+  public static long lowerHexToUnsignedLong(String lowerHex, int index) {
     long result = 0;
-    for (char c : array) {
+    for (int endIndex = Math.min(index + 16, lowerHex.length()); index < endIndex; index++) {
+      char c = lowerHex.charAt(index);
       result <<= 4;
       if (c >= '0' && c <= '9') {
         result |= c - '0';
@@ -115,7 +130,19 @@ public final class Util {
 
   static NumberFormatException isntLowerHexLong(String lowerHex) {
     throw new NumberFormatException(
-        lowerHex + " should be a 1 to 16 character lower-hex string with no prefix");
+        lowerHex + " should be a 1 to 32 character lower-hex string with no prefix");
+  }
+
+  /** Returns 16 or 32 character hex string depending on if {@code high} is zero. */
+  public static String toLowerHex(long high, long low) {
+    char[] result = new char[high != 0 ? 32 : 16];
+    int pos = 0;
+    if (high != 0) {
+      writeHexLong(result, pos, high);
+      pos += 16;
+    }
+    writeHexLong(result, pos, low);
+    return new String(result);
   }
 
   /** Inspired by {@code okio.Buffer.writeLong} */
@@ -124,6 +151,45 @@ public final class Util {
     writeHexLong(data, 0, v);
     return new String(data);
   }
+
+  /**
+   * Adapted from okio.Base64 as JRE 6 doesn't have a base64Url encoder
+   *
+   * <p>Original author: Alexander Y. Kleymenov
+   */
+  static String writeBase64Url(byte[] in) {
+    char[] result = new char[(in.length + 2) / 3 * 4];
+    int end = in.length - in.length % 3;
+    int pos = 0;
+    for (int i = 0; i < end; i += 3) {
+      result[pos++] = URL_MAP[(in[i] & 0xff) >> 2];
+      result[pos++] = URL_MAP[((in[i] & 0x03) << 4) | ((in[i + 1] & 0xff) >> 4)];
+      result[pos++] = URL_MAP[((in[i + 1] & 0x0f) << 2) | ((in[i + 2] & 0xff) >> 6)];
+      result[pos++] = URL_MAP[(in[i + 2] & 0x3f)];
+    }
+    switch (in.length % 3) {
+      case 1:
+        result[pos++] = URL_MAP[(in[end] & 0xff) >> 2];
+        result[pos++] = URL_MAP[(in[end] & 0x03) << 4];
+        result[pos++] = '=';
+        result[pos] = '=';
+        break;
+      case 2:
+        result[pos++] = URL_MAP[(in[end] & 0xff) >> 2];
+        result[pos++] = URL_MAP[((in[end] & 0x03) << 4) | ((in[end + 1] & 0xff) >> 4)];
+        result[pos++] = URL_MAP[((in[end + 1] & 0x0f) << 2)];
+        result[pos] = '=';
+        break;
+    }
+    return new String(result);
+  }
+
+  static final char[] URL_MAP = new char[] {
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
+    'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l',
+    'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4',
+    '5', '6', '7', '8', '9', '-', '_'
+  };
 
   /** Inspired by {@code okio.Buffer.writeLong} */
   public static void writeHexLong(char[] data, int pos, long v) {
@@ -137,12 +203,30 @@ public final class Util {
     writeHexByte(data, pos + 14, (byte)  (v & 0xff));
   }
 
+  // Taken from RxJava throwIfFatal, which was taken from scala
+  public static void propagateIfFatal(Throwable t) {
+    if (t instanceof VirtualMachineError) {
+      throw (VirtualMachineError) t;
+    } else if (t instanceof ThreadDeath) {
+      throw (ThreadDeath) t;
+    } else if (t instanceof LinkageError) {
+      throw (LinkageError) t;
+    }
+  }
+
   static final char[] HEX_DIGITS =
       {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
 
   static void writeHexByte(char[] data, int pos, byte b) {
     data[pos + 0] = HEX_DIGITS[(b >> 4) & 0xf];
     data[pos + 1] = HEX_DIGITS[b & 0xf];
+  }
+
+  // throwable ctor not present in JRE 6
+  static AssertionError assertionError(String message, Throwable cause) {
+    AssertionError error = new AssertionError(message);
+    error.initCause(cause);
+    throw error;
   }
 
   private Util() {

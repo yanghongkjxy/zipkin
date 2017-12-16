@@ -92,7 +92,7 @@ export function formatEndpoint({ipv4, ipv6, port = 0, serviceName = ''}) {
   return `${ipv4}:${port}`;
 }
 
-export default function traceToMustache(trace) {
+export default function traceToMustache(trace, logsUrl = undefined) {
   const summary = traceSummary(trace);
   const traceId = summary.traceId;
   const duration = mkDurationStr(summary.duration);
@@ -114,24 +114,22 @@ export default function traceToMustache(trace) {
       const width = (span.duration || 0) / summary.duration * 100;
       let errorType = 'none';
 
-      const binaryAnnotations = span.binaryAnnotations.map((a) => {
+      const binaryAnnotations = (span.binaryAnnotations || []).map((a) => {
         if (a.key === Constants.ERROR) {
           errorType = 'critical';
         }
+        const key = ConstantNames[a.key] || a.key;
         if (Constants.CORE_ADDRESS.indexOf(a.key) !== -1) {
           return {
             ...a,
-            key: ConstantNames[a.key],
+            key,
             value: formatEndpoint(a.endpoint)
           };
-        } else if (ConstantNames[a.key]) {
-          return {
-            ...a,
-            key: ConstantNames[a.key]
-          };
-        } else {
-          return a;
         }
+        return {
+          ...a,
+          key
+        };
       });
 
       if (errorType !== 'critical') {
@@ -140,7 +138,7 @@ export default function traceToMustache(trace) {
         }
       }
 
-      const localComponentAnnotation = _(span.binaryAnnotations)
+      const localComponentAnnotation = _(span.binaryAnnotations || [])
           .find((s) => s.key === Constants.LOCAL_COMPONENT);
       if (localComponentAnnotation && localComponentAnnotation.endpoint) {
         binaryAnnotations.push({
@@ -163,7 +161,7 @@ export default function traceToMustache(trace) {
         depth: (spanDepth + 1) * 5,
         depthClass: (spanDepth - 1) % 6,
         children: (groupByParentId[span.id] || []).map((s) => s.id).join(','),
-        annotations: span.annotations.map((a) => ({
+        annotations: (span.annotations || []).map((a) => ({
           isCore: Constants.CORE_ANNOTATIONS.indexOf(a.value) !== -1,
           left: (a.timestamp - spanStartTs) / span.duration * 100,
           endpoint: a.endpoint ? formatEndpoint(a.endpoint) : null,
@@ -194,6 +192,7 @@ export default function traceToMustache(trace) {
     timeMarkers,
     timeMarkersBackup,
     spans,
-    spansBackup
+    spansBackup,
+    logsUrl
   };
 }

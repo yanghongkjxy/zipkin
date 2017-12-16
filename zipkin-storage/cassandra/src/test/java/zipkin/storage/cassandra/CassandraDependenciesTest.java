@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -16,6 +16,7 @@ package zipkin.storage.cassandra;
 import java.util.List;
 import zipkin.DependencyLink;
 import zipkin.Span;
+import zipkin.internal.MergeById;
 import zipkin.storage.DependenciesTest;
 import zipkin.storage.InMemorySpanStore;
 import zipkin.storage.InMemoryStorage;
@@ -24,20 +25,9 @@ import static zipkin.TestObjects.DAY;
 import static zipkin.TestObjects.TODAY;
 import static zipkin.internal.Util.midnightUTC;
 
-public class CassandraDependenciesTest extends DependenciesTest {
-  private final CassandraStorage storage;
+abstract class CassandraDependenciesTest extends DependenciesTest {
 
-  public CassandraDependenciesTest() {
-    this.storage = CassandraTestGraph.INSTANCE.storage.get();
-  }
-
-  @Override protected CassandraStorage storage() {
-    return storage;
-  }
-
-  @Override public void clear() {
-    storage.clear();
-  }
+  @Override abstract protected CassandraStorage storage();
 
   /**
    * The current implementation does not include dependency aggregation. It includes retrieval of
@@ -55,7 +45,8 @@ public class CassandraDependenciesTest extends DependenciesTest {
     mem.spanConsumer().accept(spans);
     List<DependencyLink> links = mem.spanStore().getDependencies(TODAY + DAY, null);
 
-    long midnight = midnightUTC(spans.get(0).timestamp / 1000);
-    new CassandraDependenciesWriter(storage.session.get()).write(links, midnight);
+    // This gets or derives a timestamp from the spans
+    long midnight = midnightUTC(MergeById.apply(spans).get(0).timestamp / 1000);
+    new CassandraDependenciesWriter(storage().session.get()).write(links, midnight);
   }
 }

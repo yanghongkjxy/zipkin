@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -16,14 +16,16 @@ package zipkin;
 import java.io.ObjectStreamException;
 import java.io.Serializable;
 import java.io.StreamCorruptedException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import zipkin.internal.JsonCodec;
 import zipkin.internal.Nullable;
+import zipkin.storage.StorageComponent;
 
+import static zipkin.internal.Util.UTF_8;
 import static zipkin.internal.Util.checkNotNull;
 import static zipkin.internal.Util.equal;
 import static zipkin.internal.Util.sortedList;
@@ -40,14 +42,34 @@ import static zipkin.internal.Util.writeHexLong;
  * <p>The root span is where {@link #parentId} is null; it usually has the longest {@link #duration} in the
  * trace.
  *
- * <p>Span identifiers are packed into longs, but should be treated opaquely. String encoding is
- * fixed-width lower-hex, to avoid signed interpretation.
+ * <p>Span identifiers are packed into longs, but should be treated opaquely. ID encoding is
+ * 16 or 32 character lower-hex, to avoid signed interpretation.
  */
-public final class Span implements Comparable<Span>, Serializable {
+public final class Span implements Comparable<Span>, Serializable { // for Spark jobs
   private static final long serialVersionUID = 0L;
 
   /**
+   * When non-zero, the trace containing this span uses 128-bit trace identifiers.
+   *
+   * <p>{@code traceIdHigh} corresponds to the high bits in big-endian format and {@link #traceId}
+   * corresponds to the low bits.
+   *
+   * <p>Ex. to convert the two fields to a 128bit opaque id array, you'd use code like below.
+   * <pre>{@code
+   * ByteBuffer traceId128 = ByteBuffer.allocate(16);
+   * traceId128.putLong(span.traceIdHigh);
+   * traceId128.putLong(span.traceId);
+   * traceBytes = traceId128.array();
+   * }</pre>
+   *
+   * @see StorageComponent.Builder#strictTraceId(boolean)
+   */
+  public final long traceIdHigh;
+
+  /**
    * Unique 8-byte identifier for a trace, set on all spans within it.
+   *
+   * @see #traceIdHigh for notes about 128-bit trace identifiers
    */
   public final long traceId;
 
@@ -75,10 +97,10 @@ public final class Span implements Comparable<Span>, Serializable {
    * Epoch microseconds of the start of this span, possibly absent if this an incomplete span.
    *
    * <p>This value should be set directly by instrumentation, using the most precise value
-   * possible. For example, {@code gettimeofday} or syncing {@link System#nanoTime} against a tick
-   * of {@link System#currentTimeMillis}.
+   * possible. For example, {@code gettimeofday} or multiplying {@link System#currentTimeMillis} by
+   * 1000.
    *
-   * <p>For compatibilty with instrumentation that precede this field, collectors or span stores
+   * <p>For compatibility with instrumentation that precede this field, collectors or span stores
    * can derive this via Annotation.timestamp. For example, {@link Constants#SERVER_RECV}.timestamp
    * or {@link Constants#CLIENT_SEND}.timestamp.
    *
@@ -139,10 +161,11 @@ public final class Span implements Comparable<Span>, Serializable {
   public final Boolean debug;
 
   Span(Builder builder) {
-    this.traceId = builder.traceId;
+    this.traceId = checkNotNull(builder.traceId, "traceId");
+    this.traceIdHigh = builder.traceIdHigh != null ? builder.traceIdHigh : 0L;
     this.name = checkNotNull(builder.name, "name").isEmpty() ? ""
         : builder.name.toLowerCase(Locale.ROOT);
-    this.id = builder.id;
+    this.id = checkNotNull(builder.id, "id");
     this.parentId = builder.parentId;
     this.timestamp = builder.timestamp;
     this.duration = builder.duration;
@@ -161,21 +184,38 @@ public final class Span implements Comparable<Span>, Serializable {
 
   public static final class Builder {
     Long traceId;
+    Long traceIdHigh;
     String name;
     Long id;
     Long parentId;
     Long timestamp;
     Long duration;
-    // Not LinkedHashSet, as the constructor makes a sorted copy
-    HashSet<Annotation> annotations;
-    HashSet<BinaryAnnotation> binaryAnnotations;
+    ArrayList<Annotation> annotations;
+    ArrayList<BinaryAnnotation> binaryAnnotations;
     Boolean debug;
+    boolean isClientSpan; // internal
 
     Builder() {
     }
 
+    public Builder clear() {
+      traceId = null;
+      traceIdHigh = null;
+      name = null;
+      id = null;
+      parentId = null;
+      timestamp = null;
+      duration = null;
+      if (annotations != null) annotations.clear();
+      if (binaryAnnotations != null) binaryAnnotations.clear();
+      debug = null;
+      isClientSpan = false;
+      return this;
+    }
+
     Builder(Span source) {
       this.traceId = source.traceId;
+      this.traceIdHigh = source.traceIdHigh;
       this.name = source.name;
       this.id = source.id;
       this.parentId = source.parentId;
@@ -194,6 +234,9 @@ public final class Span implements Comparable<Span>, Serializable {
       if (this.traceId == null) {
         this.traceId = that.traceId;
       }
+      if (this.traceIdHigh == null || this.traceIdHigh == 0) {
+        this.traceIdHigh = that.traceIdHigh;
+      }
       if (this.name == null || this.name.length() == 0 || this.name.equals("unknown")) {
         this.name = that.name;
       }
@@ -204,27 +247,51 @@ public final class Span implements Comparable<Span>, Serializable {
         this.parentId = that.parentId;
       }
 
+      // When we move to span model 2, remove this code in favor of using Span.kind == CLIENT
+      boolean thisIsClientSpan = this.isClientSpan;
+      boolean thatIsClientSpan = false;
+
+      // This guards to ensure we don't add duplicate annotations or binary annotations on merge
+      if (!that.annotations.isEmpty()) {
+        boolean thisHadNoAnnotations = this.annotations == null;
+        for (Annotation a : that.annotations) {
+          if (a.value.equals(Constants.CLIENT_SEND)) thatIsClientSpan = true;
+          if (thisHadNoAnnotations || !this.annotations.contains(a)) {
+            addAnnotation(a);
+          }
+        }
+      }
+
+      if (!that.binaryAnnotations.isEmpty()) {
+        boolean thisHadNoBinaryAnnotations = this.binaryAnnotations == null;
+        for (BinaryAnnotation a : that.binaryAnnotations) {
+          if (thisHadNoBinaryAnnotations || !this.binaryAnnotations.contains(a)) {
+            addBinaryAnnotation(a);
+          }
+        }
+      }
+
       // Single timestamp makes duration easy: just choose max
-      if (this.timestamp == null || that.timestamp == null || this.timestamp.equals(that.timestamp)) {
+      if (this.timestamp == null || that.timestamp == null || this.timestamp.equals(
+          that.timestamp)) {
         this.timestamp = this.timestamp != null ? this.timestamp : that.timestamp;
         if (this.duration == null) {
           this.duration = that.duration;
         } else if (that.duration != null) {
           this.duration = Math.max(this.duration, that.duration);
         }
-      } else { // duration might need to be recalculated, since we have 2 different timestamps
-        long thisEndTs = this.duration != null ? this.timestamp + this.duration : this.timestamp;
-        long thatEndTs = that.duration != null ? that.timestamp + that.duration : that.timestamp;
-        this.timestamp = Math.min(this.timestamp, that.timestamp);
-        this.duration = Math.max(thisEndTs, thatEndTs) - this.timestamp;
+      } else {
+        // We have 2 different timestamps. If we have client data in either one of them, use that,
+        // else set timestamp and duration to null
+        if (thatIsClientSpan) {
+          this.timestamp = that.timestamp;
+          this.duration = that.duration;
+        } else if (!thisIsClientSpan) {
+          this.timestamp = null;
+          this.duration = null;
+        }
       }
 
-      for (Annotation a: that.annotations) {
-        addAnnotation(a);
-      }
-      for (BinaryAnnotation a: that.binaryAnnotations) {
-        addBinaryAnnotation(a);
-      }
       if (this.debug == null) {
         this.debug = that.debug;
       }
@@ -240,6 +307,12 @@ public final class Span implements Comparable<Span>, Serializable {
     /** @see Span#traceId */
     public Builder traceId(long traceId) {
       this.traceId = traceId;
+      return this;
+    }
+
+    /** @see Span#traceIdHigh */
+    public Builder traceIdHigh(long traceIdHigh) {
+      this.traceIdHigh = traceIdHigh;
       return this;
     }
 
@@ -273,15 +346,15 @@ public final class Span implements Comparable<Span>, Serializable {
      * @see Span#annotations
      */
     public Builder annotations(Collection<Annotation> annotations) {
-      this.annotations = new HashSet<>(annotations);
+      if (this.annotations != null) this.annotations.clear();
+      for (Annotation a : annotations) addAnnotation(a);
       return this;
     }
 
     /** @see Span#annotations */
     public Builder addAnnotation(Annotation annotation) {
-      if (annotations == null) {
-        annotations = new HashSet<>();
-      }
+      if (annotations == null) annotations = new ArrayList<>(4);
+      if (annotation.value.equals(Constants.CLIENT_SEND)) isClientSpan = true;
       annotations.add(annotation);
       return this;
     }
@@ -292,15 +365,14 @@ public final class Span implements Comparable<Span>, Serializable {
      * @see Span#binaryAnnotations
      */
     public Builder binaryAnnotations(Collection<BinaryAnnotation> binaryAnnotations) {
-      this.binaryAnnotations = new HashSet<>(binaryAnnotations);
+      if (this.binaryAnnotations != null) this.binaryAnnotations.clear();
+      for (BinaryAnnotation b : binaryAnnotations) addBinaryAnnotation(b);
       return this;
     }
 
     /** @see Span#binaryAnnotations */
     public Builder addBinaryAnnotation(BinaryAnnotation binaryAnnotation) {
-      if (binaryAnnotations == null) {
-        binaryAnnotations = new HashSet<>();
-      }
+      if (binaryAnnotations == null) binaryAnnotations = new ArrayList<>(4);
       binaryAnnotations.add(binaryAnnotation);
       return this;
     }
@@ -318,38 +390,37 @@ public final class Span implements Comparable<Span>, Serializable {
 
   @Override
   public String toString() {
-    return JsonCodec.SPAN_ADAPTER.toJson(this);
+    return new String(Codec.JSON.writeSpan(this), UTF_8);
   }
 
   @Override
   public boolean equals(Object o) {
-    if (o == this) {
-      return true;
-    }
-    if (o instanceof Span) {
-      Span that = (Span) o;
-      return (this.traceId == that.traceId)
-          && (this.name.equals(that.name))
-          && (this.id == that.id)
-          && equal(this.parentId, that.parentId)
-          && equal(this.timestamp, that.timestamp)
-          && equal(this.duration, that.duration)
-          && (this.annotations.equals(that.annotations))
-          && (this.binaryAnnotations.equals(that.binaryAnnotations))
-          && equal(this.debug, that.debug);
-    }
-    return false;
+    if (o == this) return true;
+    if (!(o instanceof Span)) return false;
+    Span that = (Span) o;
+    return (this.traceIdHigh == that.traceIdHigh)
+        && (this.traceId == that.traceId)
+        && (this.name.equals(that.name))
+        && (this.id == that.id)
+        && equal(this.parentId, that.parentId)
+        && equal(this.timestamp, that.timestamp)
+        && equal(this.duration, that.duration)
+        && (this.annotations.equals(that.annotations))
+        && (this.binaryAnnotations.equals(that.binaryAnnotations))
+        && equal(this.debug, that.debug);
   }
 
   @Override
   public int hashCode() {
     int h = 1;
     h *= 1000003;
-    h ^= (traceId >>> 32) ^ traceId;
+    h ^= (int) (h ^ ((traceIdHigh >>> 32) ^ traceIdHigh));
+    h *= 1000003;
+    h ^= (int) (h ^ ((traceId >>> 32) ^ traceId));
     h *= 1000003;
     h ^= name.hashCode();
     h *= 1000003;
-    h ^= (id >>> 32) ^ id;
+    h ^= (int) (h ^ ((id >>> 32) ^ id));
     h *= 1000003;
     h ^= (parentId == null) ? 0 : parentId.hashCode();
     h *= 1000003;
@@ -369,22 +440,44 @@ public final class Span implements Comparable<Span>, Serializable {
   @Override
   public int compareTo(Span that) {
     if (this == that) return 0;
-    int byTimestamp = Long.compare(
-        this.timestamp == null ? Long.MIN_VALUE : this.timestamp,
-        that.timestamp == null ? Long.MIN_VALUE : that.timestamp);
+    long x = this.timestamp == null ? Long.MIN_VALUE : this.timestamp;
+    long y = that.timestamp == null ? Long.MIN_VALUE : that.timestamp;
+    int byTimestamp = x < y ? -1 : x == y ? 0 : 1;  // Long.compareTo is JRE 7+
     if (byTimestamp != 0) return byTimestamp;
     return this.name.compareTo(that.name);
   }
 
-  /** Returns {@code $traceId.$spanId<:$parentId} */
-  public String idString() {
-    char[] result = new char[(3 * 16) + 3]; // 3 ids and the constant delimiters
+  /** Returns the hex representation of the span's trace ID */
+  public String traceIdString() {
+    if (traceIdHigh != 0) {
+      char[] result = new char[32];
+      writeHexLong(result, 0, traceIdHigh);
+      writeHexLong(result, 16, traceId);
+      return new String(result);
+    }
+    char[] result = new char[16];
     writeHexLong(result, 0, traceId);
-    result[16] = '.';
-    writeHexLong(result, 17, id);
-    result[33] = '<';
-    result[34] = ':';
-    writeHexLong(result, 35, parentId != null ? parentId : id);
+    return new String(result);
+  }
+
+  /** Returns {@code $traceId.$spanId<:$parentId or $spanId} */
+  public String idString() {
+    int resultLength = (3 * 16) + 3; // 3 ids and the constant delimiters
+    if (traceIdHigh != 0) resultLength += 16;
+    char[] result = new char[resultLength];
+    int pos = 0;
+    if (traceIdHigh != 0) {
+      writeHexLong(result, pos, traceIdHigh);
+      pos += 16;
+    }
+    writeHexLong(result, pos, traceId);
+    pos += 16;
+    result[pos++] = '.';
+    writeHexLong(result, pos, id);
+    pos += 16;
+    result[pos++] = '<';
+    result[pos++] = ':';
+    writeHexLong(result, pos, parentId != null ? parentId : id);
     return new String(result);
   }
 

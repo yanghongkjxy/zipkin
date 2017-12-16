@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -27,8 +27,8 @@ import zipkin.BinaryAnnotation.Type;
 import zipkin.Codec;
 import zipkin.Constants;
 import zipkin.Endpoint;
-import zipkin.InMemoryCollectorMetrics;
 import zipkin.Span;
+import zipkin.collector.InMemoryCollectorMetrics;
 import zipkin.storage.AsyncSpanConsumer;
 import zipkin.storage.AsyncSpanStore;
 import zipkin.storage.SpanStore;
@@ -121,7 +121,7 @@ public class ScribeSpanConsumerTest {
     entry.message = encodedSpan;
 
     thrown.expect(ExecutionException.class); // from dereferenced future
-    thrown.expectMessage("Cannot store spans [f66529c8cc356aa0.f66529c8cc356aa0<:f66529c8cc356aa0] due to NullPointerException()");
+    thrown.expectMessage("Cannot store spans [f66529c8cc356aa0.f66529c8cc356aa0<:f66529c8cc356aa0]");
 
     scribe.log(asList(entry)).get();
   }
@@ -162,8 +162,9 @@ public class ScribeSpanConsumerTest {
     Arrays.fill(as, 'a');
     String reallyLongAnnotation = new String(as);
 
-    Endpoint zipkinQuery = Endpoint.create("zipkin-query", (127 << 24) | 1, 9411);
-    Endpoint zipkinQuery0 = Endpoint.create("zipkin-query", (127 << 24) | 1);
+    Endpoint zipkinQuery =
+        Endpoint.builder().serviceName("zipkin-query").ipv4(127 << 24 | 1).port(9411).build();
+    Endpoint zipkinQuery0 = zipkinQuery.toBuilder().port(null).build();
 
     assertThat(consumed).containsExactly(
         Span.builder()
@@ -182,7 +183,7 @@ public class ScribeSpanConsumerTest {
             .addBinaryAnnotation(binaryAnnotation("srv/mux/enabled", true, zipkinQuery0))
             .addBinaryAnnotation(BinaryAnnotation.address(Constants.SERVER_ADDR, zipkinQuery))
             .addBinaryAnnotation(BinaryAnnotation.address(Constants.CLIENT_ADDR,
-                Endpoint.create("zipkin-query", (127 << 24) | 1, 63840)))
+                zipkinQuery.toBuilder().port(63840).build()))
             .addBinaryAnnotation(binaryAnnotation("numIds", 1, zipkinQuery))
             .debug(false)
             .build());

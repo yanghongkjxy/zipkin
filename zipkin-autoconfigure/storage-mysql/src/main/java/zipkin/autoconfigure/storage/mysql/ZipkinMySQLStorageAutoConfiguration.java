@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,12 +13,12 @@
  */
 package zipkin.autoconfigure.storage.mysql;
 
-import com.zaxxer.hikari.HikariDataSource;
 import java.util.concurrent.Executor;
 import javax.sql.DataSource;
 import org.jooq.ExecuteListenerProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -48,22 +48,13 @@ public class ZipkinMySQLStorageAutoConfiguration {
   }
 
   @Bean @ConditionalOnMissingBean(DataSource.class) DataSource mysqlDataSource() {
-    StringBuilder url = new StringBuilder("jdbc:mysql://");
-    url.append(mysql.getHost()).append(":").append(mysql.getPort());
-    url.append("/").append(mysql.getDb());
-    url.append("?autoReconnect=true");
-    url.append("&useSSL=").append(mysql.isUseSsl());
-    HikariDataSource result = new HikariDataSource();
-    result.setDriverClassName("org.mariadb.jdbc.Driver");
-    result.setJdbcUrl(url.toString());
-    result.setMaximumPoolSize(mysql.getMaxActive());
-    result.setUsername(mysql.getUsername());
-    result.setPassword(mysql.getPassword());
-    return result;
+    return mysql.toDataSource();
   }
 
-  @Bean StorageComponent storage(Executor executor, DataSource dataSource) {
+  @Bean StorageComponent storage(Executor executor, DataSource dataSource,
+      @Value("${zipkin.storage.strict-trace-id:true}") boolean strictTraceId) {
     return MySQLStorage.builder()
+        .strictTraceId(strictTraceId)
         .executor(executor)
         .datasource(dataSource)
         .listenerProvider(listener).build();

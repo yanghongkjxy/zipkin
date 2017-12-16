@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,15 +13,22 @@
  */
 package zipkin.storage;
 
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
-import java.util.LinkedList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import zipkin.Annotation;
+import zipkin.BinaryAnnotation;
+import zipkin.Endpoint;
 import zipkin.Span;
+import zipkin.internal.ApplyTimestampAndDuration;
 import zipkin.internal.Nullable;
 
 import static zipkin.Constants.CORE_ANNOTATIONS;
+import static zipkin.internal.Util.UTF_8;
 import static zipkin.internal.Util.checkArgument;
 
 /**
@@ -49,7 +56,8 @@ public final class QueryRequest {
   public final String spanName;
 
   /**
-   * Include traces whose {@link zipkin.Span#annotations} include a value in this set.
+   * Include traces whose {@link zipkin.Span#annotations} include a value in this set, or where
+   * {@link zipkin.Span#binaryAnnotations} include a String whose key is in this set.
    *
    * <p> This is an AND condition against the set, as well against {@link #binaryAnnotations}
    */
@@ -173,7 +181,7 @@ public final class QueryRequest {
   public static final class Builder {
     private String serviceName;
     private String spanName;
-    private List<String> annotations = new LinkedList<>();
+    private List<String> annotations = new ArrayList<>();
     private Map<String, String> binaryAnnotations = new LinkedHashMap<>();
     private Long minDuration;
     private Long maxDuration;
@@ -217,14 +225,16 @@ public final class QueryRequest {
      *
      * @see QueryRequest#toAnnotationQuery()
      */
-    public Builder parseAnnotationQuery(String annotationQuery) {
+    public Builder parseAnnotationQuery(@Nullable String annotationQuery) {
       if (annotationQuery != null && !annotationQuery.isEmpty()) {
         for (String ann : annotationQuery.split(" and ")) {
-          if (ann.indexOf('=') == -1) {
+          int idx = ann.indexOf('=');
+          if (idx == -1) {
             addAnnotation(ann);
           } else {
             String[] keyValue = ann.split("=");
-            addBinaryAnnotation(keyValue[0], keyValue.length < 2 ? "" :keyValue[1]);
+            addBinaryAnnotation(ann.substring(0, idx),
+                keyValue.length < 2 ? "" : ann.substring(idx + 1));
           }
         }
       }
@@ -339,11 +349,80 @@ public final class QueryRequest {
     h *= 1000003;
     h ^= (maxDuration == null) ? 0 : maxDuration.hashCode();
     h *= 1000003;
-    h ^= (endTs >>> 32) ^ endTs;
+    h ^= (int) (h ^ ((endTs >>> 32) ^ endTs));
     h *= 1000003;
-    h ^= (lookback >>> 32) ^ lookback;
+    h ^= (int) (h ^ ((lookback >>> 32) ^ lookback));
     h *= 1000003;
     h ^= limit;
     return h;
+  }
+
+  /** Tests the supplied trace against the current request */
+  public boolean test(List<Span> spans) {
+    Long timestamp = ApplyTimestampAndDuration.guessTimestamp(spans.get(0));
+    if (timestamp == null ||
+        timestamp < (endTs - lookback) * 1000 ||
+        timestamp > endTs * 1000) {
+      return false;
+    }
+    Set<String> serviceNames = new LinkedHashSet<>();
+    boolean testedDuration = minDuration == null && maxDuration == null;
+
+    String spanNameToMatch = spanName;
+    Set<String> annotationsToMatch = new LinkedHashSet<>(annotations);
+    Map<String, String> binaryAnnotationsToMatch = new LinkedHashMap<>(binaryAnnotations);
+
+    Set<String> currentServiceNames = new LinkedHashSet<>();
+    for (Span span : spans) {
+      currentServiceNames.clear();
+
+      for (Annotation a : span.annotations) {
+        if (appliesToServiceName(a.endpoint, serviceName)) {
+          annotationsToMatch.remove(a.value);
+        }
+        if (a.endpoint != null) {
+          serviceNames.add(a.endpoint.serviceName);
+          currentServiceNames.add(a.endpoint.serviceName);
+        }
+      }
+
+      for (BinaryAnnotation b : span.binaryAnnotations) {
+        if (appliesToServiceName(b.endpoint, serviceName) &&
+            b.type == BinaryAnnotation.Type.STRING &&
+            new String(b.value, UTF_8).equals(binaryAnnotationsToMatch.get(b.key))) {
+          binaryAnnotationsToMatch.remove(b.key);
+        }
+        if (appliesToServiceName(b.endpoint, serviceName)) {
+          annotationsToMatch.remove(b.key);
+        }
+        if (b.endpoint != null) {
+          serviceNames.add(b.endpoint.serviceName);
+          currentServiceNames.add(b.endpoint.serviceName);
+        }
+      }
+
+      if ((serviceName == null || currentServiceNames.contains(serviceName))
+          && !testedDuration) {
+        if (minDuration != null && maxDuration != null) {
+          testedDuration =
+              span.duration >= minDuration && span.duration <= maxDuration;
+        } else if (minDuration != null) {
+          testedDuration = span.duration >= minDuration;
+        }
+      }
+
+      if (span.name.equals(spanNameToMatch)) {
+        spanNameToMatch = null;
+      }
+    }
+    return (serviceName == null || serviceNames.contains(serviceName))
+        && spanNameToMatch == null
+        && annotationsToMatch.isEmpty()
+        && binaryAnnotationsToMatch.isEmpty()
+        && testedDuration;
+  }
+
+  private static boolean appliesToServiceName(Endpoint endpoint, String serviceName) {
+    return serviceName == null || endpoint == null || endpoint.serviceName.equals(serviceName);
   }
 }

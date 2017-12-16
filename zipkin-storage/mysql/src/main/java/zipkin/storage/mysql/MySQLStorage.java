@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -28,7 +28,6 @@ import zipkin.storage.StorageComponent;
 
 import static zipkin.internal.Util.checkNotNull;
 import static zipkin.storage.StorageAdapters.blockingToAsync;
-import static zipkin.storage.mysql.internal.generated.DefaultCatalog.DEFAULT_CATALOG;
 import static zipkin.storage.mysql.internal.generated.tables.ZipkinAnnotations.ZIPKIN_ANNOTATIONS;
 import static zipkin.storage.mysql.internal.generated.tables.ZipkinDependencies.ZIPKIN_DEPENDENCIES;
 import static zipkin.storage.mysql.internal.generated.tables.ZipkinSpans.ZIPKIN_SPANS;
@@ -38,11 +37,18 @@ public final class MySQLStorage implements StorageComponent {
     return new Builder();
   }
 
-  public final static class Builder {
+  public final static class Builder implements StorageComponent.Builder {
+    boolean strictTraceId = true;
     private DataSource datasource;
     private Settings settings = new Settings().withRenderSchema(false);
     private ExecuteListenerProvider listenerProvider;
     private Executor executor;
+
+    /** {@inheritDoc} */
+    @Override public Builder strictTraceId(boolean strictTraceId) {
+      this.strictTraceId = strictTraceId;
+      return this;
+    }
 
     public Builder datasource(DataSource datasource) {
       this.datasource = checkNotNull(datasource, "datasource");
@@ -64,7 +70,7 @@ public final class MySQLStorage implements StorageComponent {
       return this;
     }
 
-    public MySQLStorage build() {
+    @Override public MySQLStorage build() {
       return new MySQLStorage(this);
     }
 
@@ -79,22 +85,19 @@ public final class MySQLStorage implements StorageComponent {
   private final DataSource datasource;
   private final Executor executor;
   private final DSLContexts context;
-  final Lazy<Boolean> hasIpv6;
-  final Lazy<Boolean> hasPreAggregatedDependencies;
-  private final SpanStore spanStore;
-  private final AsyncSpanStore asyncSpanStore;
-  private final AsyncSpanConsumer asyncSpanConsumer;
+  final Lazy<Schema> schema;
+  final boolean strictTraceId;
 
   MySQLStorage(MySQLStorage.Builder builder) {
     this.datasource = checkNotNull(builder.datasource, "datasource");
     this.executor = checkNotNull(builder.executor, "executor");
     this.context = new DSLContexts(builder.settings, builder.listenerProvider);
-    this.hasIpv6 = new HasIpv6(datasource, context);
-    this.hasPreAggregatedDependencies = new HasPreAggregatedDependencies(datasource, context);
-    this.spanStore = new MySQLSpanStore(datasource, context, hasIpv6, hasPreAggregatedDependencies);
-    this.asyncSpanStore = blockingToAsync(spanStore, executor);
-    MySQLSpanConsumer spanConsumer = new MySQLSpanConsumer(datasource, context, hasIpv6);
-    this.asyncSpanConsumer = blockingToAsync(spanConsumer, executor);
+    this.schema = new Lazy<Schema>() {
+      @Override protected Schema compute() {
+        return new Schema(datasource, context);
+      }
+    };
+    this.strictTraceId = builder.strictTraceId;
   }
 
   /** Returns the session in use by this storage component. */
@@ -103,22 +106,21 @@ public final class MySQLStorage implements StorageComponent {
   }
 
   @Override public SpanStore spanStore() {
-    return spanStore;
+    return new MySQLSpanStore(datasource, context, schema.get(), strictTraceId);
   }
 
   @Override public AsyncSpanStore asyncSpanStore() {
-    return asyncSpanStore;
+    return blockingToAsync(spanStore(), executor);
   }
 
   @Override public AsyncSpanConsumer asyncSpanConsumer() {
-    return asyncSpanConsumer;
+    MySQLSpanConsumer spanConsumer = new MySQLSpanConsumer(datasource, context, schema.get());
+    return blockingToAsync(spanConsumer, executor);
   }
 
   @Override public CheckResult check() {
     try (Connection conn = datasource.getConnection()) {
-      if (!context.get(conn).meta().getSchemas().contains(DEFAULT_CATALOG.ZIPKIN)) {
-        throw new IllegalStateException("Zipkin schema is missing");
-      }
+      context.get(conn).select(ZIPKIN_SPANS.TRACE_ID).from(ZIPKIN_SPANS).limit(1).execute();
     } catch (SQLException | RuntimeException e) {
       return CheckResult.failed(e);
     }

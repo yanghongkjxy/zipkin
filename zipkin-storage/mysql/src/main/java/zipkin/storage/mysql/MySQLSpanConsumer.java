@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -28,23 +28,23 @@ import org.jooq.TableField;
 import zipkin.Annotation;
 import zipkin.BinaryAnnotation;
 import zipkin.Span;
-import zipkin.internal.ApplyTimestampAndDuration;
-import zipkin.internal.Lazy;
 import zipkin.storage.AsyncSpanConsumer;
 import zipkin.storage.StorageAdapters;
 
+import static zipkin.internal.ApplyTimestampAndDuration.authoritativeTimestamp;
+import static zipkin.internal.ApplyTimestampAndDuration.guessTimestamp;
 import static zipkin.storage.mysql.internal.generated.tables.ZipkinAnnotations.ZIPKIN_ANNOTATIONS;
 import static zipkin.storage.mysql.internal.generated.tables.ZipkinSpans.ZIPKIN_SPANS;
 
 final class MySQLSpanConsumer implements StorageAdapters.SpanConsumer {
   private final DataSource datasource;
   private final DSLContexts context;
-  private final Lazy<Boolean> hasIpv6;
+  private final Schema schema;
 
-  MySQLSpanConsumer(DataSource datasource, DSLContexts context, Lazy<Boolean> hasIpv6) {
+  MySQLSpanConsumer(DataSource datasource, DSLContexts context, Schema schema) {
     this.datasource = datasource;
     this.context = context;
-    this.hasIpv6 = hasIpv6;
+    this.schema = schema;
   }
 
   /** Blocking version of {@link AsyncSpanConsumer#accept} */
@@ -56,22 +56,22 @@ final class MySQLSpanConsumer implements StorageAdapters.SpanConsumer {
       List<Query> inserts = new ArrayList<>();
 
       for (Span span : spans) {
-        Long authoritativeTimestamp = span.timestamp;
-        span = ApplyTimestampAndDuration.apply(span);
-        Long binaryAnnotationTimestamp = span.timestamp;
-        if (binaryAnnotationTimestamp == null) { // fallback if we have no timestamp, yet
-          binaryAnnotationTimestamp = System.currentTimeMillis() * 1000;
-        }
+        Long overridingTimestamp = authoritativeTimestamp(span);
+        Long timestamp = overridingTimestamp != null ? overridingTimestamp : guessTimestamp(span);
 
         Map<TableField<Record, ?>, Object> updateFields = new LinkedHashMap<>();
         if (!span.name.equals("") && !span.name.equals("unknown")) {
           updateFields.put(ZIPKIN_SPANS.NAME, span.name);
         }
-        if (authoritativeTimestamp != null) {
-          updateFields.put(ZIPKIN_SPANS.START_TS, authoritativeTimestamp);
+        // replace any tentative timestamp with the authoritative one.
+        if (overridingTimestamp != null) {
+          updateFields.put(ZIPKIN_SPANS.START_TS, overridingTimestamp);
         }
         if (span.duration != null) {
           updateFields.put(ZIPKIN_SPANS.DURATION, span.duration);
+        }
+        if (span.parentId != null) {
+          updateFields.put(ZIPKIN_SPANS.PARENT_ID, span.parentId);
         }
 
         InsertSetMoreStep<Record> insertSpan = create.insertInto(ZIPKIN_SPANS)
@@ -80,8 +80,12 @@ final class MySQLSpanConsumer implements StorageAdapters.SpanConsumer {
             .set(ZIPKIN_SPANS.PARENT_ID, span.parentId)
             .set(ZIPKIN_SPANS.NAME, span.name)
             .set(ZIPKIN_SPANS.DEBUG, span.debug)
-            .set(ZIPKIN_SPANS.START_TS, span.timestamp)
+            .set(ZIPKIN_SPANS.START_TS, timestamp)
             .set(ZIPKIN_SPANS.DURATION, span.duration);
+
+        if (span.traceIdHigh != 0 && schema.hasTraceIdHigh) {
+          insertSpan.set(ZIPKIN_SPANS.TRACE_ID_HIGH, span.traceIdHigh);
+        }
 
         inserts.add(updateFields.isEmpty() ?
             insertSpan.onDuplicateKeyIgnore() :
@@ -94,10 +98,13 @@ final class MySQLSpanConsumer implements StorageAdapters.SpanConsumer {
               .set(ZIPKIN_ANNOTATIONS.A_KEY, annotation.value)
               .set(ZIPKIN_ANNOTATIONS.A_TYPE, -1)
               .set(ZIPKIN_ANNOTATIONS.A_TIMESTAMP, annotation.timestamp);
+          if (span.traceIdHigh != 0 && schema.hasTraceIdHigh) {
+            insert.set(ZIPKIN_ANNOTATIONS.TRACE_ID_HIGH, span.traceIdHigh);
+          }
           if (annotation.endpoint != null) {
             insert.set(ZIPKIN_ANNOTATIONS.ENDPOINT_SERVICE_NAME, annotation.endpoint.serviceName);
             insert.set(ZIPKIN_ANNOTATIONS.ENDPOINT_IPV4, annotation.endpoint.ipv4);
-            if (annotation.endpoint.ipv6 != null && hasIpv6.get()) {
+            if (annotation.endpoint.ipv6 != null && schema.hasIpv6) {
               insert.set(ZIPKIN_ANNOTATIONS.ENDPOINT_IPV6, annotation.endpoint.ipv6);
             }
             insert.set(ZIPKIN_ANNOTATIONS.ENDPOINT_PORT, annotation.endpoint.port);
@@ -112,11 +119,14 @@ final class MySQLSpanConsumer implements StorageAdapters.SpanConsumer {
               .set(ZIPKIN_ANNOTATIONS.A_KEY, annotation.key)
               .set(ZIPKIN_ANNOTATIONS.A_VALUE, annotation.value)
               .set(ZIPKIN_ANNOTATIONS.A_TYPE, annotation.type.value)
-              .set(ZIPKIN_ANNOTATIONS.A_TIMESTAMP, binaryAnnotationTimestamp);
+              .set(ZIPKIN_ANNOTATIONS.A_TIMESTAMP, timestamp);
+          if (span.traceIdHigh != 0 && schema.hasTraceIdHigh) {
+            insert.set(ZIPKIN_ANNOTATIONS.TRACE_ID_HIGH, span.traceIdHigh);
+          }
           if (annotation.endpoint != null) {
             insert.set(ZIPKIN_ANNOTATIONS.ENDPOINT_SERVICE_NAME, annotation.endpoint.serviceName);
             insert.set(ZIPKIN_ANNOTATIONS.ENDPOINT_IPV4, annotation.endpoint.ipv4);
-            if (annotation.endpoint.ipv6 != null && hasIpv6.get()) {
+            if (annotation.endpoint.ipv6 != null && schema.hasIpv6) {
               insert.set(ZIPKIN_ANNOTATIONS.ENDPOINT_IPV6, annotation.endpoint.ipv6);
             }
             insert.set(ZIPKIN_ANNOTATIONS.ENDPOINT_PORT, annotation.endpoint.port);

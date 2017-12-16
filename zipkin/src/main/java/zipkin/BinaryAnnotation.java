@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -18,6 +18,7 @@ import zipkin.internal.JsonCodec;
 import zipkin.internal.Nullable;
 import zipkin.internal.Util;
 
+import static zipkin.internal.Util.UTF_8;
 import static zipkin.internal.Util.checkNotNull;
 import static zipkin.internal.Util.equal;
 
@@ -94,6 +95,8 @@ public final class BinaryAnnotation implements Comparable<BinaryAnnotation> {
 
   /** String values are the only queryable type of binary annotation. */
   public static BinaryAnnotation create(String key, String value, @Nullable Endpoint endpoint) {
+    checkNotNull(key, "key");
+    if (value == null) throw new NullPointerException("value of " + key);
     return new BinaryAnnotation(key, value.getBytes(Util.UTF_8), Type.STRING, endpoint);
   }
 
@@ -129,10 +132,13 @@ public final class BinaryAnnotation implements Comparable<BinaryAnnotation> {
   @Nullable
   public final Endpoint endpoint;
 
-  BinaryAnnotation(String key, byte[] value, Type type, Endpoint endpoint) {
-    this.key = checkNotNull(key, "key");
-    this.value = checkNotNull(value, "value");
-    this.type = checkNotNull(type, "type");
+  BinaryAnnotation(String key, byte[] value, Type type, @Nullable Endpoint endpoint) {
+    checkNotNull(key, "key");
+    if (value == null) throw new NullPointerException("value of " + key);
+    if (type == null) throw new NullPointerException("type of " + key);
+    this.key = key;
+    this.value = value;
+    this.type = type;
     this.endpoint = endpoint;
   }
 
@@ -197,15 +203,8 @@ public final class BinaryAnnotation implements Comparable<BinaryAnnotation> {
   }
 
   @Override
-  public String toString() {
-    return JsonCodec.BINARY_ANNOTATION_ADAPTER.toJson(this);
-  }
-
-  @Override
   public boolean equals(Object o) {
-    if (o == this) {
-      return true;
-    }
+    if (o == this) return true;
     if (o instanceof BinaryAnnotation) {
       BinaryAnnotation that = (BinaryAnnotation) o;
       return (this.key.equals(that.key))
@@ -235,5 +234,9 @@ public final class BinaryAnnotation implements Comparable<BinaryAnnotation> {
   public int compareTo(BinaryAnnotation that) {
     if (this == that) return 0;
     return key.compareTo(that.key);
+  }
+
+  @Override public String toString() {
+    return new String(JsonCodec.writeBinaryAnnotation(this), UTF_8);
   }
 }

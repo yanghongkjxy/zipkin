@@ -52,6 +52,12 @@ describe('traceToMustache', () => {
     modelview.services.should.equal(3);
   });
 
+  it('should show logsUrl', () => {
+    const logsUrl = 'http/url.com';
+    const modelview = traceToMustache(trace, logsUrl);
+    modelview.logsUrl.should.equal(logsUrl);
+  });
+
   it('should show service counts', () => {
     const modelview = traceToMustache(trace);
     modelview.serviceCounts.should.eql([{
@@ -89,12 +95,56 @@ describe('traceToMustache', () => {
         key: 'sa',
         value: true,
         endpoint: {serviceName: 'zipkin-query', ipv4: '127.0.0.1', port: 9411}
+      }, {
+        key: 'literally-false',
+        value: 'false',
+        endpoint: {serviceName: 'zipkin-query', ipv4: '127.0.0.1', port: 9411}
       }]
     }];
     const {spans: [testSpan]} = traceToMustache(testTrace);
     testSpan.annotations[0].value.should.equal('Server Receive');
     testSpan.annotations[1].value.should.equal('Server Send');
     testSpan.binaryAnnotations[0].key.should.equal('Server Address');
+    testSpan.binaryAnnotations[1].value.should.equal('false');
+  });
+
+  it('should tolerate spans without annotations', () => {
+    const testTrace = [{
+      traceId: '2480ccca8df0fca5',
+      name: 'get',
+      id: '2480ccca8df0fca5',
+      timestamp: 1457186385375000,
+      duration: 333000,
+      binaryAnnotations: [{
+        key: 'lc',
+        value: 'component',
+        endpoint: {serviceName: 'zipkin-query', ipv4: '127.0.0.1', port: 9411}
+      }]
+    }];
+    const {spans: [testSpan]} = traceToMustache(testTrace);
+    testSpan.binaryAnnotations[0].key.should.equal('Local Component');
+  });
+
+  it('should tolerate spans without binary annotations', () => {
+    const testTrace = [{
+      traceId: '2480ccca8df0fca5',
+      name: 'get',
+      id: '2480ccca8df0fca5',
+      timestamp: 1457186385375000,
+      duration: 333000,
+      annotations: [{
+        timestamp: 1457186385375000,
+        value: 'sr',
+        endpoint: {serviceName: 'zipkin-query', ipv4: '127.0.0.1', port: 9411}
+      }, {
+        timestamp: 1457186385708000,
+        value: 'ss',
+        endpoint: {serviceName: 'zipkin-query', ipv4: '127.0.0.1', port: 9411}
+      }]
+    }];
+    const {spans: [testSpan]} = traceToMustache(testTrace);
+    testSpan.annotations[0].value.should.equal('Server Receive');
+    testSpan.annotations[1].value.should.equal('Server Send');
   });
 });
 

@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,9 +13,11 @@
  */
 package zipkin;
 
+import java.io.Serializable;
 import zipkin.internal.JsonCodec;
 import zipkin.internal.Nullable;
 
+import static zipkin.internal.Util.UTF_8;
 import static zipkin.internal.Util.checkNotNull;
 import static zipkin.internal.Util.equal;
 
@@ -24,7 +26,8 @@ import static zipkin.internal.Util.equal;
  *
  * <p>Unlike log statements, annotations are often codes: Ex. {@link Constants#SERVER_RECV "sr"}.
  */
-public final class Annotation implements Comparable<Annotation> {
+public final class Annotation implements Comparable<Annotation>, Serializable { // for Spark jobs
+  private static final long serialVersionUID = 0L;
 
   public static Annotation create(long timestamp, String value, @Nullable Endpoint endpoint) {
     return new Annotation(timestamp, value, endpoint);
@@ -33,9 +36,8 @@ public final class Annotation implements Comparable<Annotation> {
   /**
    * Microseconds from epoch.
    *
-   * <p>This value should be set directly by instrumentation, using the most precise value
-   * possible. For example, {@code gettimeofday} or syncing {@link System#nanoTime} against a tick
-   * of {@link System#currentTimeMillis}.
+   * <p>This value should be set directly by instrumentation, using the most precise value possible.
+   * For example, {@code gettimeofday} or multiplying {@link System#currentTimeMillis} by 1000.
    */
   public final long timestamp;
 
@@ -49,7 +51,7 @@ public final class Annotation implements Comparable<Annotation> {
   @Nullable
   public final Endpoint endpoint;
 
-  Annotation(long timestamp, String value, Endpoint endpoint) {
+  Annotation(long timestamp, String value, @Nullable Endpoint endpoint) {
     this.timestamp = timestamp;
     this.value = checkNotNull(value, "value");
     this.endpoint = endpoint;
@@ -101,15 +103,8 @@ public final class Annotation implements Comparable<Annotation> {
   }
 
   @Override
-  public String toString() {
-    return JsonCodec.ANNOTATION_ADAPTER.toJson(this);
-  }
-
-  @Override
   public boolean equals(Object o) {
-    if (o == this) {
-      return true;
-    }
+    if (o == this) return true;
     if (o instanceof Annotation) {
       Annotation that = (Annotation) o;
       return (this.timestamp == that.timestamp)
@@ -123,7 +118,7 @@ public final class Annotation implements Comparable<Annotation> {
   public int hashCode() {
     int h = 1;
     h *= 1000003;
-    h ^= (timestamp >>> 32) ^ timestamp;
+    h ^= (int) (h ^ ((timestamp >>> 32) ^ timestamp));
     h *= 1000003;
     h ^= value.hashCode();
     h *= 1000003;
@@ -135,8 +130,12 @@ public final class Annotation implements Comparable<Annotation> {
   @Override
   public int compareTo(Annotation that) {
     if (this == that) return 0;
-    int byTimestamp = Long.compare(timestamp, that.timestamp);
+    int byTimestamp = timestamp < that.timestamp ? -1 : timestamp == that.timestamp ? 0 : 1;
     if (byTimestamp != 0) return byTimestamp;
     return value.compareTo(that.value);
+  }
+
+  @Override public String toString() {
+    return new String(JsonCodec.writeAnnotation(this), UTF_8);
   }
 }

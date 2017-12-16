@@ -11,11 +11,10 @@
  * or implied. See the License for the specific language governing permissions and limitations under
  * the License.
  */
-package zipkin;
+package zipkin.collector;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import zipkin.collector.CollectorMetrics;
 
 import static zipkin.internal.Util.checkNotNull;
 
@@ -29,7 +28,7 @@ public final class InMemoryCollectorMetrics implements CollectorMetrics {
   private final String spansDropped;
 
   public InMemoryCollectorMetrics() {
-    this(new ConcurrentHashMap<String, AtomicInteger>(), null);
+    this(new ConcurrentHashMap<>(), null);
   }
 
   InMemoryCollectorMetrics(ConcurrentHashMap<String, AtomicInteger> metrics, String transport) {

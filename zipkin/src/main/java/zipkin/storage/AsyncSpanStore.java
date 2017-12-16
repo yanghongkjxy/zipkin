@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -35,14 +35,26 @@ public interface AsyncSpanStore {
   void getTraces(QueryRequest request, Callback<List<List<Span>>> callback);
 
   /**
-   * Version of {@link SpanStore#getTrace} that accepts {@link Callback}.
+   * @deprecated Please switch to {@link #getTrace(long, long, Callback)}
    */
+  @Deprecated
   void getTrace(long id, Callback<List<Span>> callback);
 
   /**
-   * Version of {@link SpanStore#getRawTrace} that accepts {@link Callback}.
+   * Version of {@link SpanStore#getTrace(long, long)} that accepts {@link Callback}.
    */
+  void getTrace(long traceIdHigh, long traceIdLow, Callback<List<Span>> callback);
+
+  /**
+   * @deprecated Please switch to {@link #getRawTrace(long, long, Callback)}
+   */
+  @Deprecated
   void getRawTrace(long traceId, Callback<List<Span>> callback);
+
+  /**
+   * Version of {@link SpanStore#getRawTrace(long, long)} that accepts {@link Callback}.
+   */
+  void getRawTrace(long traceIdHigh, long traceIdLow, Callback<List<Span>> callback);
 
   /**
    * Version of {@link SpanStore#getServiceNames} that accepts {@link Callback}.

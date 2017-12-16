@@ -5,12 +5,6 @@
 # https://docs.travis-ci.com/user/ci-environment/#Virtualization-environments
 sudo: required
 dist: trusty
-addons:
-  apt:
-    packages:
-    - mysql-server-5.6
-    - mysql-client-core-5.6
-    - mysql-client-5.6
 
 cache:
   directories:
@@ -24,37 +18,33 @@ jdk:
   - oraclejdk8
 
 services:
-  - mysql
+  - docker
+  - rabbitmq
 
 before_install:
-  # Manually install cassandra until https://github.com/travis-ci/travis-ci/issues/3952
-  # See https://github.com/openzipkin/zipkin/issues/706
-  - curl -SL http://downloads.datastax.com/community/dsc-cassandra-2.2.5-bin.tar.gz | tar xz
-  - sed -i -e 's/INFO/WARN/g' dsc-cassandra-*/conf/logback.xml
-  - sudo dsc-cassandra-*/bin/cassandra
-  # install mysql schema
-  - mysql -uroot -e 'SET GLOBAL innodb_file_format=Barracuda'
-  - mysql -uroot -e 'create database if not exists zipkin'
-  - mysql -uroot -Dzipkin < zipkin-storage/mysql/src/main/resources/mysql.sql
   # parameters used during a release
-  - git config user.name "$GH_USER"
-  - git config user.email "$GH_USER_EMAIL"
+  # allocate commits to CI, not the owner of the deploy key
+  - git config user.name "zipkinci"
+  - git config user.email "zipkinci+zipkin-dev@googlegroups.com"
   # setup https authentication credentials, used by ./mvnw release:prepare
   - git config credential.helper "store --file=.git/credentials"
   - echo "https://$GH_TOKEN:@github.com" > .git/credentials
 
-  # Manually install elasticsearch until https://github.com/travis-ci/apt-source-whitelist/issues/190
-  - curl -SL https://download.elasticsearch.org/elasticsearch/release/org/elasticsearch/distribution/tar/elasticsearch/2.2.1/elasticsearch-2.2.1.tar.gz | tar xz
-  - elasticsearch-*/bin/elasticsearch -d > /dev/null
+  # Required for Elasticsearch 5 (See https://github.com/docker-library/docs/tree/master/elasticsearch#host-setup)
+  - sudo sysctl -w vm.max_map_count=262144
 
   # Manually install and run zk+kafka as it isn't an available service
-  - curl -SL http://www.us.apache.org/dist/kafka/0.8.2.2/kafka_2.11-0.8.2.2.tgz | tar xz
+  - curl -SL http://archive.apache.org/dist/kafka/0.8.2.2/kafka_2.11-0.8.2.2.tgz | tar xz
   - nohup bash -c "cd kafka_* && bin/zookeeper-server-start.sh config/zookeeper.properties >/dev/null 2>&1 &"
   - nohup bash -c "cd kafka_* && bin/kafka-server-start.sh config/server.properties >/dev/null 2>&1 &"
 
+  # Quiet Maven invoker logs (Downloading... when running zipkin-server/src/it)
+  - echo "MAVEN_OPTS='-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn'" > ~/.mavenrc
+
 install:
   # Override default travis to use the maven wrapper
-  - ./mvnw install -DskipTests=true -Dmaven.javadoc.skip=true -B -V
+  # skip license on travis due to #1512
+  - ./mvnw install -DskipTests=true -Dmaven.javadoc.skip=true -B -V -Dlicense.skip=true
 
 script:
   - ./travis/publish.sh
@@ -71,12 +61,8 @@ env:
   - secure: "Ce34YTvUPNNmPaM98FWG9+QGI9aW9DBuWIvc5viCsNhlxGywWujlzvKFj2LVjdAp3ft8tpCd79ZHe3hMrfZ/SAzsT2qwNcAsUmE9YgjAFKyS7TS2CP2PMS+U7iFchCBZnCv7L6LUCClQa+pMBrSNNOJxDGK3woDxkf1FjgOY6hQ="
   # Ex. travis encrypt BINTRAY_KEY=xxx-https://bintray.com/profile/edit-xxx --add
   - secure: "gIWukQGUH6VoOldxuvYHaIeTGC4QBja5+ZUJPIhx5BlcXWweGwBlVeTTvBzdvYb3qcTjdr+tCDyonKuDsfxzxkPL7+aMK4f1Wxk8YyFouzrx/S2H9di3h4MptUk8S8JpAq7S5itWbb0fz0+R1qzCgDZR7ZBMpJWty2UIKho7zoo="
-  # Ex. travis encrypt GH_USER_EMAIL=for_github@domain.com --add
-  - secure: "L+KzRZyN7eXmKj0rQC7cb/ajyD5yIYevcxGJS9G1DE93WBn77FfTO/0obfaCx8F1WD3is9FKpfqpG8SP3z8vcz3UTFMsEdNCDbz4X71UbiNQH8GFOzY7heHB+Uk9SRC/3ElFdGYrWFhE0BFiliyvgCLvE5fmW7imSNE8+rMRXSE="
-  # Ex. travis encrypt GH_USER=your_github_account --add
-  - secure: "CQlsIF1ixcNRS6qwk5QZgGJ62BO1n5CJcpA4TvbF/KFb7XiT6GF4DaJyPjiOtD9n3+x1pRq9bdx5VLu2zCEC/gyWom2JRYOZAu4BgUaPGgxo+8XFZ9JytS04UgS3XmXbjBG8w1rkqbxTpblSes3Xe4egzHUF7eaEpZQkTpjJFrw="
   # Ex. travis encrypt GH_TOKEN=XXX-https://github.com/settings/tokens-XXX --add
-  - secure: "K6Ksogtv97Him8sPIYTLAQ6nGtaED+PQL8UB9hxaC0JxPyOp6uRjfOWSuazg7zFmWkuBnmqDb4/pA0lE0KzRof+Jx36eQE6YJA30hQ7a3mumuSMC+Dl2+eBHQ9xtL1KyS2uIktNL+znhZlHmrbTND+HCyhirdCQ4UR6RdRRf/Mg="
+  - secure: "Wl88p48OjWFzNFHc6ilJxDYXwODlsOWRWUYqalMpJwR1znmPn2XrYrhBbfD+AMfDFHCWKGYjhqHj+/le5dF4m9+vM3PKD3wE3UJYXSMmcXqlK7A/ohcNiEuNvh84qP4XPtaVd+s8vJ4UdmeRQ0vUsIRASWqzdeTPn12YA5h6aDk="
   # Ex. travis encrypt SONATYPE_USER=your_sonatype_account
   - secure: "EEIGkGWsje/NZmqEnS8Dhk92KAsFqq070hVCwEwUwUdRe4tZpL3eTOtSD8/Ul5ICtIApC08Mr4g+4sSkjztlCbkxycUSnUsfAJV3vTHyPnvdoztE1Yh6hm4UfTPbMNVFcigxMLOnApeaeB7x9CeRGPRbHuUONs44fuLPKDoYMo4="
   # Ex. travis encrypt SONATYPE_PASSWORD=your_sonatype_password

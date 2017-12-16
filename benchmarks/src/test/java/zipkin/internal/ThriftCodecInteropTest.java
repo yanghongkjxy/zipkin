@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -37,13 +37,12 @@ public class ThriftCodecInteropTest {
   @Test
   public void spanSerializationIsCompatible() throws UnknownHostException, TException {
 
-    zipkin.Endpoint zipkinEndpoint = zipkin.Endpoint.builder()
-        .serviceName("web")
-        .ipv4(124 << 24 | 13 << 16 | 90 << 8 | 3)
-        .ipv6(Inet6Address.getByName("2001:db8::c001").getAddress())
-        .port((short) 80).build();
+    zipkin.Endpoint.Builder builder = zipkin.Endpoint.builder().serviceName("web").port(80);
+    builder.parseIp("124.13.90.3");
+    builder.parseIp("2001:db8::c001");
+    zipkin.Endpoint zipkinEndpoint = builder.build();
 
-    zipkin.Span zipkinSpan = zipkin.Span.builder().traceId(1L).id(1L).name("get")
+    zipkin.Span zipkinSpan = zipkin.Span.builder().traceId(1L).traceIdHigh(2L).id(1L).name("get")
         .addAnnotation(zipkin.Annotation.create(1000, SERVER_RECV, zipkinEndpoint))
         .addAnnotation(zipkin.Annotation.create(1350, SERVER_SEND, zipkinEndpoint))
         .build();
@@ -56,7 +55,7 @@ public class ThriftCodecInteropTest {
 
     Span thriftSpan = new Span(1L, "get", 1L, asList(
         new Annotation(1000, SERVER_RECV).setHost(thriftEndpoint),
-        new Annotation(1350, SERVER_SEND).setHost(thriftEndpoint)), asList());
+        new Annotation(1350, SERVER_SEND).setHost(thriftEndpoint)), asList()).setTrace_id_high(2L);
 
     assertThat(serializer.serialize(thriftSpan))
         .isEqualTo(Codec.THRIFT.writeSpan(zipkinSpan));

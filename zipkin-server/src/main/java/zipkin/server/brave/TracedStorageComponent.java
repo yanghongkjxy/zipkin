@@ -20,6 +20,12 @@ import zipkin.storage.AsyncSpanStore;
 import zipkin.storage.SpanStore;
 import zipkin.storage.StorageComponent;
 
+/**
+ * Storage component that traces each method invocation with Zipkin.
+ *
+ * <p>Note: this inherits the {@link StorageComponent.Builder#strictTraceId(boolean)} from the
+ * delegate.
+ */
 public final class TracedStorageComponent implements StorageComponent {
   private final Brave brave;
   private final StorageComponent delegate;
@@ -30,7 +36,7 @@ public final class TracedStorageComponent implements StorageComponent {
   }
 
   @Override public SpanStore spanStore() {
-    return new TracedSpanStore(brave.localTracer(), delegate.spanStore());
+    return new TracedSpanStore(brave.localTracer(), delegate);
   }
 
   @Override public AsyncSpanStore asyncSpanStore() {

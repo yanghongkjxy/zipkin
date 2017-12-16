@@ -38,7 +38,6 @@
 }
 
 #trace-container .span .handle {
-  width: 150px;
   overflow: hidden;
   white-space: nowrap;
   float: left;
@@ -121,6 +120,7 @@
   margin-left: -6px;
 }
 
+/* Core annotations like "sr" "ss" are hidden to make more obvious user-defined ones */
 #trace-container .span .duration .annotation.core {
   display: none;
 }
@@ -189,6 +189,11 @@
 }
 
 #spanPanel #binaryAnnotations td.value {
+  word-break: break-all;
+  max-width: 75%;
+}
+
+#spanPanel #debugInfo td.value {
   word-break: break-all;
   max-width: 75%;
 }

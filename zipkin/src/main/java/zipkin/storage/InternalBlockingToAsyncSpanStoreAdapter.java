@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -18,6 +18,7 @@ import java.util.concurrent.Executor;
 import zipkin.DependencyLink;
 import zipkin.Span;
 import zipkin.internal.Nullable;
+import zipkin.internal.Util;
 
 import static zipkin.internal.Util.checkNotNull;
 
@@ -43,25 +44,36 @@ final class InternalBlockingToAsyncSpanStoreAdapter implements AsyncSpanStore {
   }
 
   @Override public void getTrace(final long id, Callback<List<Span>> callback) {
+    getTrace(0L, id, callback);
+  }
+
+  @Override public void getTrace(final long traceIdHigh, final long traceIdLow,
+      Callback<List<Span>> callback) {
     executor.execute(new InternalCallbackRunnable<List<Span>>(callback) {
       @Override List<Span> complete() {
-        return delegate.getTrace(id);
+        return delegate.getTrace(traceIdHigh, traceIdLow);
       }
 
       @Override public String toString() {
-        return "getTrace(" + id + ")";
+        return "getTrace(" + Util.toLowerHex(traceIdHigh, traceIdLow) + ")";
       }
     });
   }
 
   @Override public void getRawTrace(final long traceId, Callback<List<Span>> callback) {
+    getRawTrace(0L, traceId, callback);
+  }
+
+  @Override
+  public void getRawTrace(final long traceIdHigh, final long traceIdLow,
+      Callback<List<Span>> callback) {
     executor.execute(new InternalCallbackRunnable<List<Span>>(callback) {
       @Override List<Span> complete() {
-        return delegate.getRawTrace(traceId);
+        return delegate.getRawTrace(traceIdHigh, traceIdLow);
       }
 
       @Override public String toString() {
-        return "getRawTrace(" + traceId + ")";
+        return "getRawTrace(" + Util.toLowerHex(traceIdHigh, traceIdLow) + ")";
       }
     });
   }

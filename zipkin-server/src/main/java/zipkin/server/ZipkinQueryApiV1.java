@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -34,6 +35,7 @@ import zipkin.storage.QueryRequest;
 import zipkin.storage.StorageComponent;
 
 import static org.springframework.http.MediaType.APPLICATION_JSON_VALUE;
+import static zipkin.internal.Util.UTF_8;
 import static zipkin.internal.Util.lowerHexToUnsignedLong;
 
 /**
@@ -43,11 +45,12 @@ import static zipkin.internal.Util.lowerHexToUnsignedLong;
  */
 @RestController
 @RequestMapping("/api/v1")
+@ConditionalOnProperty(name = "zipkin.query.enabled", matchIfMissing = true)
 public class ZipkinQueryApiV1 {
 
   @Autowired
   @Value("${zipkin.query.lookback:86400000}")
-  int defaultLookback = 86400000; // 7 days in millis
+  int defaultLookback = 86400000; // 1 day in millis
 
   /** The Cache-Control max-age (seconds) for /api/v1/services and /api/v1/spans */
   @Value("${zipkin.query.names-max-age:300}")
@@ -81,7 +84,7 @@ public class ZipkinQueryApiV1 {
   }
 
   @RequestMapping(value = "/traces", method = RequestMethod.GET, produces = APPLICATION_JSON_VALUE)
-  public byte[] getTraces(
+  public String getTraces(
       @RequestParam(value = "serviceName", required = false) String serviceName,
       @RequestParam(value = "spanName", defaultValue = "all") String spanName,
       @RequestParam(value = "annotationQuery", required = false) String annotationQuery,
@@ -100,19 +103,21 @@ public class ZipkinQueryApiV1 {
         .lookback(lookback != null ? lookback : defaultLookback)
         .limit(limit).build();
 
-    return Codec.JSON.writeTraces(storage.spanStore().getTraces(queryRequest));
+    return new String(Codec.JSON.writeTraces(storage.spanStore().getTraces(queryRequest)), UTF_8);
   }
 
-  @RequestMapping(value = "/trace/{traceId}", method = RequestMethod.GET, produces = APPLICATION_JSON_VALUE)
-  public byte[] getTrace(@PathVariable String traceId, WebRequest request) {
-    long id = lowerHexToUnsignedLong(traceId);
+  @RequestMapping(value = "/trace/{traceIdHex}", method = RequestMethod.GET, produces = APPLICATION_JSON_VALUE)
+  public String getTrace(@PathVariable String traceIdHex, WebRequest request) {
+    long traceIdHigh = traceIdHex.length() == 32 ? lowerHexToUnsignedLong(traceIdHex, 0) : 0L;
+    long traceIdLow = lowerHexToUnsignedLong(traceIdHex);
     String[] raw = request.getParameterValues("raw"); // RequestParam doesn't work for param w/o value
-    List<Span> trace = raw != null ? storage.spanStore().getRawTrace(id) : storage.spanStore().getTrace(id);
-
+    List<Span> trace = raw != null
+        ? storage.spanStore().getRawTrace(traceIdHigh, traceIdLow)
+        : storage.spanStore().getTrace(traceIdHigh, traceIdLow);
     if (trace == null) {
-      throw new TraceNotFoundException(traceId, id);
+      throw new TraceNotFoundException(traceIdHex, traceIdHigh, traceIdLow);
     }
-    return Codec.JSON.writeSpans(trace);
+    return new String(Codec.JSON.writeSpans(trace), UTF_8);
   }
 
   @ExceptionHandler(TraceNotFoundException.class)
@@ -121,8 +126,9 @@ public class ZipkinQueryApiV1 {
   }
 
   static class TraceNotFoundException extends RuntimeException {
-    public TraceNotFoundException(String traceId, long id) {
-      super("Cannot find trace for id=" + traceId + ", long value=" + id);
+    public TraceNotFoundException(String traceIdHex, Long traceIdHigh, long traceId) {
+      super(String.format("Cannot find trace for id=%s,  parsed value=%s", traceIdHex,
+          traceIdHigh != null ? traceIdHigh + "," + traceId : traceId));
     }
   }
 

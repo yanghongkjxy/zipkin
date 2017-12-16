@@ -17,7 +17,6 @@ import com.facebook.swift.codec.ThriftCodecManager;
 import com.facebook.swift.service.ThriftServer;
 import com.facebook.swift.service.ThriftServerConfig;
 import com.facebook.swift.service.ThriftServiceProcessor;
-import java.io.Closeable;
 import zipkin.collector.Collector;
 import zipkin.collector.CollectorComponent;
 import zipkin.collector.CollectorMetrics;
@@ -34,7 +33,7 @@ import static zipkin.internal.Util.checkNotNull;
  * a single span, which is TBinaryProtocol big-endian, then base64 encoded. These spans are chained
  * to an {@link GuavaSpanConsumer#accept asynchronous span consumer}.
  */
-public final class ScribeCollector implements CollectorComponent, Closeable {
+public final class ScribeCollector implements CollectorComponent {
 
   public static Builder builder() {
     return new Builder();
@@ -43,7 +42,7 @@ public final class ScribeCollector implements CollectorComponent, Closeable {
   /** Configuration including defaults needed to receive spans from a Scribe category. */
   public static final class Builder implements CollectorComponent.Builder {
     Collector.Builder delegate = Collector.builder(ScribeCollector.class);
-    CollectorMetrics metrics;
+    CollectorMetrics metrics = CollectorMetrics.NOOP_METRICS;
     String category = "zipkin";
     int port = 9410;
 

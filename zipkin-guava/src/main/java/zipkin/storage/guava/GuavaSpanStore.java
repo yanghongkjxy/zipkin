@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -35,14 +35,26 @@ public interface GuavaSpanStore {
   ListenableFuture<List<List<Span>>> getTraces(QueryRequest request);
 
   /**
-   * Version of {@link SpanStore#getTrace} that returns {@link ListenableFuture}.
+   * @deprecated Please switch to {@link #getTrace(long, long)}
    */
+  @Deprecated
   ListenableFuture<List<Span>> getTrace(long id);
 
   /**
-   * Version of {@link SpanStore#getRawTrace} that returns {@link ListenableFuture}.
+   * Version of {@link SpanStore#getTrace(long, long)} that returns {@link ListenableFuture}.
    */
+  ListenableFuture<List<Span>> getTrace(long traceIdHigh, long traceIdLow);
+
+  /**
+   * @deprecated Please switch to {@link #getRawTrace(long, long)}
+   */
+  @Deprecated
   ListenableFuture<List<Span>> getRawTrace(long traceId);
+
+  /**
+   * Version of {@link SpanStore#getRawTrace(long, long)} that returns {@link ListenableFuture}.
+   */
+  ListenableFuture<List<Span>> getRawTrace(long traceIdHigh, long traceIdLow);
 
   /**
    * Version of {@link SpanStore#getServiceNames} that returns {@link ListenableFuture}.

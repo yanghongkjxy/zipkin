@@ -16,6 +16,8 @@ export default component(function serviceName() {
 
   this.updateServiceNameDropdown = function(ev, data) {
     $('#serviceName').empty();
+    this.$node.append($($.parseHTML('<option value="all">all</option>')));
+
     $.each(data.names, (i, item) => {
       $('<option>').val(item).text(item).appendTo('#serviceName');
     });
@@ -23,6 +25,13 @@ export default component(function serviceName() {
     this.$node.find(`[value="${data.lastServiceName}"]`).attr('selected', 'selected');
 
     this.trigger('chosen:updated');
+
+    // On the first view there won't be a selected or "last" service
+    // name.  Instead the first service at the top of the list will be
+    // displayed, so load the span names for the top service too.
+    if (!data.lastServiceName && data.names && data.names.length > 1) {
+      this.$node.trigger('uiFirstLoadSpanNames', data.names[0]);
+    }
   };
 
   this.after('initialize', function() {

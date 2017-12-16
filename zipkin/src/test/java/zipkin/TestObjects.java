@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,6 +13,8 @@
  */
 package zipkin;
 
+import java.net.Inet6Address;
+import java.net.UnknownHostException;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
@@ -24,6 +26,7 @@ import static java.util.stream.Collectors.toList;
 import static zipkin.Constants.CLIENT_ADDR;
 import static zipkin.Constants.CLIENT_RECV;
 import static zipkin.Constants.CLIENT_SEND;
+import static zipkin.Constants.ERROR;
 import static zipkin.Constants.SERVER_ADDR;
 import static zipkin.Constants.SERVER_RECV;
 import static zipkin.Constants.SERVER_SEND;
@@ -40,13 +43,13 @@ public final class TestObjects {
   public static final Endpoint WEB_ENDPOINT = Endpoint.builder()
       .serviceName("web")
       .ipv4(124 << 24 | 13 << 16 | 90 << 8 | 3)
-      // Cheat so we don't have to catch an exception here
-      .ipv6(sun.net.util.IPAddressUtil.textToNumericFormatV6("2001:db8::c001"))
-      .port((short) 80).build();
+      .ipv6(fromIPv6Literal("2001:db8::c001"))
+      .port(80).build();
   public static final Endpoint APP_ENDPOINT =
-      Endpoint.create("app", 172 << 24 | 17 << 16 | 2, 8080);
+      Endpoint.builder().serviceName("app").ipv4(172 << 24 | 17 << 16 | 2).port(8080).build();
   public static final Endpoint DB_ENDPOINT =
-      Endpoint.create("db", 172 << 24 | 17 << 16 | 2, 3306);
+      Endpoint.builder().serviceName("db").ipv4(172 << 24 | 17 << 16 | 2).port(3306).build();
+  public static final Endpoint NO_IP_ENDPOINT = Endpoint.builder().serviceName("no_ip").build();
 
   static final long WEB_SPAN_ID = -692101025335252320L;
   static final long APP_SPAN_ID = -7842865617155193778L;
@@ -68,14 +71,15 @@ public final class TestObjects {
       Span.builder().traceId(WEB_SPAN_ID).parentId(APP_SPAN_ID).id(DB_SPAN_ID).name("query")
           .addAnnotation(Annotation.create((TODAY + 150) * 1000, CLIENT_SEND, APP_ENDPOINT))
           .addAnnotation(Annotation.create((TODAY + 200) * 1000, CLIENT_RECV, APP_ENDPOINT))
-          .addBinaryAnnotation(BinaryAnnotation.address(CLIENT_ADDR, APP_ENDPOINT))
+          .addAnnotation(Annotation.create((TODAY + 190) * 1000, "⻩", NO_IP_ENDPOINT))
           .addBinaryAnnotation(BinaryAnnotation.address(SERVER_ADDR, DB_ENDPOINT))
+          .addBinaryAnnotation(BinaryAnnotation.create(ERROR, "\uD83D\uDCA9", NO_IP_ENDPOINT))
           .build()
   ).stream().map(ApplyTimestampAndDuration::apply).collect(toList());
 
   public static final List<DependencyLink> LINKS = asList(
-      DependencyLink.builder().parent("web").child("app").callCount(1).build(),
-      DependencyLink.builder().parent("app").child("db").callCount(1).build()
+    DependencyLink.builder().parent("web").child("app").callCount(1L).build(),
+    DependencyLink.builder().parent("app").child("db").callCount(1L).errorCount(1L).build()
   );
   public static final Dependencies DEPENDENCIES = Dependencies.create(TODAY, TODAY + 1000, LINKS);
 
@@ -83,7 +87,7 @@ public final class TestObjects {
 
   /** Reuse a builder as it is significantly slows tests to create 100000 of these! */
   static Span.Builder spanBuilder() {
-    Endpoint e = Endpoint.create("service", 127 << 24 | 1, 8080);
+    Endpoint e = Endpoint.builder().serviceName("service").ipv4(127 << 24 | 1).port(8080).build();
     Annotation sr = Annotation.create(System.currentTimeMillis() * 1000, SERVER_RECV, e);
     Annotation ss = Annotation.create(sr.timestamp + 1000, SERVER_SEND, e);
     BinaryAnnotation ba = BinaryAnnotation.create(TraceKeys.HTTP_METHOD, "GET", e);
@@ -99,5 +103,13 @@ public final class TestObjects {
 
   public static Span span(long traceId) {
     return spanBuilder.traceId(traceId).id(traceId).build();
+  }
+
+  static byte[] fromIPv6Literal(String literal) {
+    try {
+      return Inet6Address.getByName(literal).getAddress();
+    } catch (UnknownHostException e) {
+      throw new AssertionError(e);
+    }
   }
 }

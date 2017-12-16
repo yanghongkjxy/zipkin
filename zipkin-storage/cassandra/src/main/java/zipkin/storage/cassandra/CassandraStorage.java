@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -11,7 +11,6 @@
  * or implied. See the License for the specific language governing permissions and limitations under
  * the License.
  */
-
 package zipkin.storage.cassandra;
 
 import com.datastax.driver.core.Session;
@@ -22,11 +21,12 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.io.IOException;
-import java.util.LinkedList;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import zipkin.internal.Nullable;
 import zipkin.storage.QueryRequest;
+import zipkin.storage.StorageComponent;
 import zipkin.storage.guava.LazyGuavaStorageComponent;
 
 import static java.lang.String.format;
@@ -50,12 +50,14 @@ public final class CassandraStorage
     return new Builder();
   }
 
-  public static final class Builder {
+  public static final class Builder implements StorageComponent.Builder {
+    boolean strictTraceId = true;
     String keyspace = "zipkin";
     String contactPoints = "localhost";
     String localDc;
     int maxConnections = 8;
     boolean ensureSchema = true;
+    boolean useSsl = false;
     String username;
     String password;
     int maxTraceCols = 100000;
@@ -77,6 +79,12 @@ public final class CassandraStorage
     int indexTtl = (int) TimeUnit.DAYS.toSeconds(3);
     SessionFactory sessionFactory = new SessionFactory.Default();
 
+    /** {@inheritDoc} */
+    @Override public Builder strictTraceId(boolean strictTraceId) {
+      this.strictTraceId = strictTraceId;
+      return this;
+    }
+
     /** Override to control how sessions are created. */
     public Builder sessionFactory(SessionFactory sessionFactory) {
       this.sessionFactory = checkNotNull(sessionFactory, "sessionFactory");
@@ -89,7 +97,7 @@ public final class CassandraStorage
       return this;
     }
 
-    /** Comma separated list of hosts / IPs part of Cassandra cluster. Defaults to localhost */
+    /** Comma separated list of host addresses part of Cassandra cluster. You can also specify a custom port with 'host:port'. Defaults to localhost on port 9042 **/
     public Builder contactPoints(String contactPoints) {
       this.contactPoints = checkNotNull(contactPoints, "contactPoints");
       return this;
@@ -116,6 +124,15 @@ public final class CassandraStorage
      */
     public Builder ensureSchema(boolean ensureSchema) {
       this.ensureSchema = ensureSchema;
+      return this;
+    }
+
+    /**
+     * Use ssl for connection.
+     * Defaults to false.
+     */
+    public Builder useSsl(boolean useSsl) {
+      this.useSsl = useSsl;
       return this;
     }
 
@@ -205,14 +222,14 @@ public final class CassandraStorage
      *
      * <p>Indexing in cassandra will usually have more rows than trace identifiers due to factors
      * including table design and collection implementation. As there's no way to DISTINCT out
-     * duplicates server-side, this over-fetches client-side when {@code indexFetchMultiplier} > 1.
+     * duplicates server-side, this over-fetches client-side when {@code indexFetchMultiplier} &gt; 1.
      */
     public Builder indexFetchMultiplier(int indexFetchMultiplier) {
       this.indexFetchMultiplier = indexFetchMultiplier;
       return this;
     }
 
-    public CassandraStorage build() {
+    @Override public CassandraStorage build() {
       return new CassandraStorage(this);
     }
 
@@ -232,9 +249,11 @@ public final class CassandraStorage
   final String username;
   final String password;
   final boolean ensureSchema;
+  final boolean useSsl;
   final String keyspace;
   final CacheBuilderSpec indexCacheSpec;
   final int indexFetchMultiplier;
+  final boolean strictTraceId;
   final LazySession session;
 
   CassandraStorage(Builder builder) {
@@ -244,8 +263,10 @@ public final class CassandraStorage
     this.username = builder.username;
     this.password = builder.password;
     this.ensureSchema = builder.ensureSchema;
+    this.useSsl = builder.useSsl;
     this.keyspace = builder.keyspace;
     this.maxTraceCols = builder.maxTraceCols;
+    this.strictTraceId = builder.strictTraceId;
     this.indexTtl = builder.indexTtl;
     this.spanTtl = builder.spanTtl;
     this.bucketCount = builder.bucketCount;
@@ -263,8 +284,8 @@ public final class CassandraStorage
   }
 
   @Override protected CassandraSpanStore computeGuavaSpanStore() {
-    return new CassandraSpanStore(session.get(), bucketCount, indexTtl, maxTraceCols,
-        indexFetchMultiplier);
+    return new CassandraSpanStore(session.get(), bucketCount, maxTraceCols,
+        indexFetchMultiplier, strictTraceId);
   }
 
   @Override protected CassandraSpanConsumer computeGuavaSpanConsumer() {
@@ -287,7 +308,7 @@ public final class CassandraStorage
   /** Truncates all the column families, or throws on any failure. */
   @VisibleForTesting void clear() {
     guavaSpanConsumer().clear();
-    List<ListenableFuture<?>> futures = new LinkedList<>();
+    List<ListenableFuture<?>> futures = new ArrayList<>();
     for (String cf : ImmutableList.of(
         "traces",
         "dependencies",
@@ -295,8 +316,7 @@ public final class CassandraStorage
         Tables.SPAN_NAMES,
         Tables.SERVICE_NAME_INDEX,
         Tables.SERVICE_SPAN_NAME_INDEX,
-        Tables.ANNOTATIONS_INDEX,
-        Tables.SPAN_DURATION_INDEX
+        Tables.ANNOTATIONS_INDEX
     )) {
       futures.add(session.get().executeAsync(format("TRUNCATE %s", cf)));
     }
